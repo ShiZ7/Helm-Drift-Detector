@@ -33,7 +33,7 @@ jobs:
 
       - name: Run Drift Detection Script
         run: |
-          bash ./scripts/detect-drift.sh ./desired.yaml
+          bash /scripts/detect-drift.sh /desired.yaml
 
       - name: Upload Drift Report
         uses: actions/upload-artifact@v4
