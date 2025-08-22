@@ -51,5 +51,5 @@ jobs:
       - name: Fail on drift detection
         if: failure()
         run: |
-          echo "DRIFT DETECTED"
+          echo "❌ DRIFT DETECTED"
           exit 1
