@@ -2,45 +2,70 @@ name: Helm Drift Detection
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [ main, master ]
+    paths:
+      - 'Helm-Detection/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
-  drift-detection:
-    name: Detect Drift Between Desired and Live HPA
+  detect-drift:
+    name: Detect Drift in HPA/Service Config
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: 📦 Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Authenticate with GCP
+      - name: 🔐 Authenticate to GCP (uses your JSON secret)
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: '${{ secrets.GCP_SA_KEY_JSON }}'
+          credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
 
-      - name: Set GKE Credentials
+      - name: ☁️ Get GKE Credentials 
         uses: google-github-actions/get-gke-credentials@v2
         with:
-          cluster_name: cluster-1
-          location: us-central1
-          project_id: exchange-sandbox-2f1f
+          cluster_name: cluster-1                
+          location:     us-central1              
+          project_id:   exchange-sandbox-2f1f    
 
-      - name: Install Helm and yq
+      - name: 🧰 Install Helm + yq
         run: |
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          sudo snap install yq
+          curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          YQ_VERSION=v4.44.3
+          sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          sudo chmod +x /usr/local/bin/yq
+          helm version && yq --version
 
-      - name: Run Drift Detection Script
+      # Optional first-run debug: shows where files actually are
+      - name: 🔎 Debug:list files(first run)
         run: |
-          bash /scripts/detect-drift.sh /desired.yaml
+          pwd
+          ls -la
+          echo "---- Helm-Detection ----"
+          ls -la Helm-Detection
+          echo "---- find detect-drift ----"
+          find . -maxdepth 4 -type f -iname "detect-drift*"
+          echo "---- find desired.yaml ----"
+          find . -maxdepth 4 -type f -name "desired.yaml"
 
-      - name: Upload Drift Report
+      - name: 🚀 Run Drift Detection Script
+        working-directory: Helm-Detection
+        run: |
+          bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
+
+      - name: 📤 Upload Drift Report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: drift-log
-          path: drift.log
+          name: drift-report
+          path: Helm-Detection/drift.log
 
-      - name: Fail on Drift
+      - name: ❌ Fail PR if Drift Detected
         if: failure()
-        run: echo "Drift detected! Failing the build." && exit 1
+        run: |
+          echo "❌ DRIFT DETECTED. Failing build."
+          exit 1
