@@ -2,54 +2,75 @@ name: Helm Drift Detection
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [ main, master ]
     paths:
-      - 'desired.yaml'
+      - 'Helm-Drift-Detector/**'
       - '.github/workflows/**'
-      - 'scripts/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  WORKDIR: Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection
 
 jobs:
-  drift-detection:
-    name: Helm Drift Detection
+  detect-drift:
+    name: Detect Drift in HPA/Service Config
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: 📦 Checkout Repo
+        uses: actions/checkout@v4
 
-      - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v1
+      - name: 🔐 Authenticate to GCP (uses your JSON secret)
+        uses: google-github-actions/auth@v2
         with:
-          service_account_key: ${{ secrets.GCP_SA_KEY_JSON }}
+          credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
+
+      - name: ☁️ Get GKE Credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: cluster-1
+          location: us-central1
           project_id: exchange-sandbox-2f1f
 
-      - name: Authenticate and Connect to GKE cluster
+      - name: 🧰 Install Helm + yq
         run: |
-          gcloud container clusters get-credentials cluster-1 \
-            --region=us-central1 \
-            --project=exchange-sandbox-2f1f
+          curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          YQ_VERSION=v4.44.3
+          sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          sudo chmod +x /usr/local/bin/yq
+          helm version && yq --version
 
-      - name: Install dependencies
+      - name: 🔎 Debug & verify files
         run: |
-          sudo apt-get update
-          sudo apt-get install -y yq
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          set -euxo pipefail
+          echo "Workspace: $GITHUB_WORKSPACE"
+          ls -la
+          echo "---- Listing $WORKDIR ----"
+          ls -la "$WORKDIR"
+          echo "---- find detect-drift & desired.yaml ----"
+          find "$WORKDIR" -maxdepth 3 -type f \( -name "detect-drift.sh" -o -name "desired.yaml" \) -print
+          test -f "$WORKDIR/scripts/detect-drift.sh"
+          test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
+          chmod +x "$WORKDIR/scripts/detect-drift.sh"
 
-      - name: Run drift detection script
+      - name: 🚀 Run Drift Detection Script
+        working-directory: ${{ env.WORKDIR }}
         run: |
-          chmod +x ./scripts/detect-drift.sh
-          ./scripts/detect-drift.sh
+          set -euxo pipefail
+          bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
 
-      - name: Upload drift report
+      - name: 📤 Upload Drift Report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: drift-report
-          path: drift.log
+          path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
 
-      - name: Fail on drift detection
+      - name: ❌ Fail PR if Drift Detected
         if: failure()
         run: |
-          echo "DRIFT DETECTED"
+          echo "❌ DRIFT DETECTED. Failing build."
           exit 1
