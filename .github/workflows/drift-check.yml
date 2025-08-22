@@ -1,0 +1,58 @@
+name: Helm Drift Detection
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  detect-drift:
+    name: Detect Drift in HPA/Service Config
+    runs-on: ubuntu-latest
+
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GKE_REGION: ${{ secrets.GKE_REGION }}
+      GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
+      GCP_SA_KEY_JSON: ${{ secrets.GCP_SA_KEY_JSON }}
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3
+
+      - name: Setup GCloud CLI
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
+
+      - name: Set GKE Context
+        run: |
+          gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" --region "$GKE_REGION" --project "$GCP_PROJECT_ID"
+
+      - name: Install Helm and yq
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          sudo snap install yq
+
+      - name: Run Helm Drift Detection Script
+        run: |
+          chmod +x ./Helm-Detection/scripts/detect-drift
+          ./Helm-Detection/scripts/detect-drift
+
+      - name: Upload Drift Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report
+          path: drift.log
+
+      - name: Fail PR if Drift Detected
+        if: failure()
+        run: |
+          echo "DRIFT DETECTED. Failing build."
+          exit 1
