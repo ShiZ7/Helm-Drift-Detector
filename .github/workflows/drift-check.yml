@@ -4,55 +4,52 @@ on:
   pull_request:
     branches:
       - main
-      - master
-
-permissions:
-  contents: read
-  pull-requests: write
+    paths:
+      - 'desired.yaml'
+      - '.github/workflows/**'
+      - 'scripts/**'
 
 jobs:
-  detect-drift:
-    name: Detect Drift in HPA/Service Config
+  drift-detection:
+    name: Helm Drift Detection
     runs-on: ubuntu-latest
 
-    env:
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GKE_REGION: ${{ secrets.GKE_REGION }}
-      GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
-      GCP_SA_KEY_JSON: ${{ secrets.GCP_SA_KEY_JSON }}
-
     steps:
-      - name: Checkout Repo
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Setup GCloud CLI
-        uses: google-github-actions/auth@v1
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
+          service_account_key: ${{ secrets.GCP_SA_KEY_JSON }}
+          project_id: exchange-sandbox-2f1f
 
-      - name: Set GKE Context
+      - name: Authenticate and Connect to GKE cluster
         run: |
-          gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" --region "$GKE_REGION" --project "$GCP_PROJECT_ID"
+          gcloud container clusters get-credentials cluster-1 \
+            --region=us-central1 \
+            --project=exchange-sandbox-2f1f
 
-      - name: Install Helm and yq
+      - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y yq
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          sudo snap install yq
 
-      - name: Run Helm Drift Detection Script
+      - name: Run drift detection script
         run: |
-          chmod +x ./Helm-Detection/scripts/detect-drift
-          ./Helm-Detection/scripts/detect-drift
+          chmod +x ./scripts/detect-drift.sh
+          ./scripts/detect-drift.sh
 
-      - name: Upload Drift Log
+      - name: Upload drift report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: drift-report
           path: drift.log
 
-      - name: Fail PR if Drift Detected
+      - name: Fail on drift detection
         if: failure()
         run: |
-          echo "DRIFT DETECTED. Failing build."
+          echo "DRIFT DETECTED"
           exit 1
