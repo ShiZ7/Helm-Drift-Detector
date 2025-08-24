@@ -3,7 +3,7 @@
 # Columns: timestamp,namespace,resource_type,resource_name,field,declared,observed,editor
 set -euo pipefail
 
-# Your known names
+# your known names
 ns="sandbox-nginx"
 hpa_name="test-nginx"
 svc_name="test-nginx"
@@ -17,27 +17,25 @@ out="drift.csv"
 out_dir="reports"
 mkdir -p "$out_dir"
 
-# Header
+# header
 echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$out"
 
-# If there's no log, still emit one row
+# if no log, emit one row (keeps CSV consistent)
 if [ ! -s "$in" ]; then
   echo "$ts_iso,$ns,-,-,no_drift,-,-,$editor" >> "$out"
 else
   prev_is_drift=0
   while IFS= read -r line || [ -n "$line" ]; do
-    # detect a DRIFT block line
     if echo "$line" | grep -qE '^[[:space:]]*DRIFT:'; then
       prev_is_drift=1
       continue
     fi
 
-    # read the details line after DRIFT:
     if [ $prev_is_drift -eq 1 ]; then
       detail="$line"
       prev_is_drift=0
 
-      # field name (left side before "("), trim trailing spaces
+      # field name (before "(")
       field=$(echo "$detail" | awk -F'(' '{print $1}' | sed -E 's/[[:space:]]+$//')
 
       # values (support Local/Live or Declared/Observed)
@@ -60,12 +58,12 @@ else
     fi
   done < "$in"
 
-  # If only header exists, add explicit no_drift
+  # if only header exists, write explicit no_drift
   lines=$(wc -l < "$out" | tr -d ' ')
   [ "$lines" -le 1 ] && echo "$ts_iso,$ns,-,-,no_drift,-,-,$editor" >> "$out"
 fi
 
-# Timestamped copies into reports/
+# timestamped copies into reports/
 cp "$out" "$out_dir/drift_report_${ts_file}.csv"
 [ -f "$in" ] && cp "$in" "$out_dir/drift_${ts_file}.log" || true
 
