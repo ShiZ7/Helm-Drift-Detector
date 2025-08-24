@@ -6,12 +6,9 @@ on:
     paths:
       - 'Helm-Drift-Detector/**'
       - '.github/workflows/**'
-   
-    paths-ignore:
-      - 'Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection/reports/**'
 
 permissions:
-  contents: write          
+  contents: write         # <-- was read; needed to commit CSV into PR branch
   pull-requests: write
 
 env:
@@ -58,6 +55,9 @@ jobs:
           test -f "$WORKDIR/scripts/detect-drift.sh"
           test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
           chmod +x "$WORKDIR/scripts/detect-drift.sh"
+          # ensure CSV helper exists & is executable
+          test -f "$WORKDIR/scripts/log_to_csv.sh" || (echo "Missing scripts/log_to_csv.sh" && exit 2)
+          chmod +x "$WORKDIR/scripts/log_to_csv.sh"
 
       - name:  Run Drift Detection Script
         working-directory: ${{ env.WORKDIR }}
@@ -72,18 +72,17 @@ jobs:
           name: drift-report
           path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
 
- 
-
+      # ---------- NEW: build CSV from drift.log ----------
       - name:  Build CSV drift report
         if: always()
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euo pipefail
-          chmod +x ./scripts/log_to_csv.sh
-          ./scripts/log_to_csv.sh   # reads drift.log, writes reports/drift_report_<ts>.csv
+          ./scripts/log_to_csv.sh  # writes reports/drift_report_<ts>.csv and copies drift.log
 
-      - name:  Commit CSV to PR branch
-        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+      # ---------- NEW: commit CSV back to PR branch ----------
+      - name:  Commit CSV to PR branch (no loop)
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
         run: |
           set -euxo pipefail
           BRANCH='${{ github.event.pull_request.head.ref }}'
@@ -91,7 +90,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add ${{ env.WORKDIR }}/reports/*
           git diff --cached --quiet && echo "No report changes to commit" && exit 0
-          git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]"
+          git commit -m "chore(drift): add CSV report for ${{ github.sha }}"
           git push origin "HEAD:${BRANCH}"
 
       - name:  Fail PR if Drift Detected
