@@ -8,7 +8,7 @@ on:
       - '.github/workflows/**'
 
 permissions:
-  contents: write         # <-- was read; needed to commit CSV into PR branch
+  contents: write           # needed so we can commit CSV into the PR branch
   pull-requests: write
 
 env:
@@ -55,9 +55,6 @@ jobs:
           test -f "$WORKDIR/scripts/detect-drift.sh"
           test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
           chmod +x "$WORKDIR/scripts/detect-drift.sh"
-          # ensure CSV helper exists & is executable
-          test -f "$WORKDIR/scripts/log_to_csv.sh" || (echo "Missing scripts/log_to_csv.sh" && exit 2)
-          chmod +x "$WORKDIR/scripts/log_to_csv.sh"
 
       - name:  Run Drift Detection Script
         working-directory: ${{ env.WORKDIR }}
@@ -72,16 +69,16 @@ jobs:
           name: drift-report
           path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
 
-      # ---------- NEW: build CSV from drift.log ----------
+      # ---------- NEW: build CSV from drift.log (no chmod needed) ----------
       - name:  Build CSV drift report
         if: always()
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euo pipefail
-          ./scripts/log_to_csv.sh  # writes reports/drift_report_<ts>.csv and copies drift.log
+          bash ./scripts/log_to_csv.sh   # writes reports/drift_report_<ts>.csv and copies drift.log
 
-      # ---------- NEW: commit CSV back to PR branch ----------
-      - name:  Commit CSV to PR branch (no loop)
+      # ---------- NEW: commit CSV back to PR branch (avoid loops) ----------
+      - name:  Commit CSV to PR branch
         if: always() && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
         run: |
           set -euxo pipefail
