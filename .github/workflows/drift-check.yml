@@ -20,22 +20,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📦 Checkout Repo
+      - name:  Checkout Repo
         uses: actions/checkout@v4
 
-      - name: 🔐 Authenticate to GCP (uses your JSON secret)
+      - name:  Authenticate to GCP (uses your JSON secret)
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
 
-      - name: ☁️ Get GKE Credentials
+      - name:  Get GKE Credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: cluster-1
           location: us-central1
           project_id: exchange-sandbox-2f1f
 
-      - name: 🧰 Install Helm + yq
+      - name:  Install Helm + yq
         run: |
           curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           YQ_VERSION=v4.44.3
@@ -43,7 +43,7 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
           helm version && yq --version
 
-      - name: 🔎 Debug & verify files
+      - name:  Debug & verify files
         run: |
           set -euxo pipefail
           echo "Workspace: $GITHUB_WORKSPACE"
@@ -56,21 +56,21 @@ jobs:
           test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
           chmod +x "$WORKDIR/scripts/detect-drift.sh"
 
-      - name: 🚀 Run Drift Detection Script
+      - name:  Run Drift Detection Script
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euxo pipefail
           bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
 
-      - name: 📤 Upload Drift Report
+      - name:  Upload Drift Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: drift-report
           path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
 
-      - name: ❌ Fail PR if Drift Detected
+      - name:  Fail PR if Drift Detected
         if: failure()
         run: |
-          echo "❌ DRIFT DETECTED. Failing build."
+          echo " DRIFT DETECTED. Failing build."
           exit 1
