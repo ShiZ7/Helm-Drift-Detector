@@ -1,0 +1,6 @@
+timestamp,namespace,resource_type,resource_name,field,declared,observed,editor
+2025-08-24T22:57:57Z,sandbox-nginx,HPA,test-nginx, minReplicas,2,1,ShiZ7
+2025-08-24T22:57:57Z,sandbox-nginx,HPA,test-nginx, maxReplicas,7,5,ShiZ7
+2025-08-24T22:57:57Z,sandbox-nginx,HPA,test-nginx, CPU Target,76%,100%,ShiZ7
+2025-08-24T22:57:57Z,sandbox-nginx,Service,test-nginx, Service Port,77,80,ShiZ7
+2025-08-24T22:57:57Z,sandbox-nginx,Service,test-nginx, Service TargetPort,7070,8080,ShiZ7
