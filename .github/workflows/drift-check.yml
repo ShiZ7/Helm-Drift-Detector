@@ -8,7 +8,7 @@ on:
       - '.github/workflows/**'
 
 permissions:
-  contents: write           # needed so we can commit CSV into the PR branch
+  contents: write           # allow committing CSV into the PR branch
   pull-requests: write
 
 env:
@@ -54,7 +54,6 @@ jobs:
           find "$WORKDIR" -maxdepth 3 -type f \( -name "detect-drift.sh" -o -name "desired.yaml" \) -print
           test -f "$WORKDIR/scripts/detect-drift.sh"
           test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
-          chmod +x "$WORKDIR/scripts/detect-drift.sh"
 
       - name:  Run Drift Detection Script
         working-directory: ${{ env.WORKDIR }}
@@ -69,7 +68,7 @@ jobs:
           name: drift-report
           path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
 
-      # ---------- NEW: build CSV from drift.log (no chmod needed) ----------
+      # ---------- NEW: build CSV from drift.log ----------
       - name:  Build CSV drift report
         if: always()
         working-directory: ${{ env.WORKDIR }}
@@ -77,18 +76,35 @@ jobs:
           set -euo pipefail
           bash ./scripts/log_to_csv.sh   # writes reports/drift_report_<ts>.csv and copies drift.log
 
-      # ---------- NEW: commit CSV back to PR branch (avoid loops) ----------
+      # ---------- NEW: commit CSV back to PR branch (resilient) ----------
       - name:  Commit CSV to PR branch
         if: always() && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
           BRANCH='${{ github.event.pull_request.head.ref }}'
+
+          # ensure we're on the PR head branch (avoid detached HEAD)
+          git fetch origin "${BRANCH}" --depth=1
+          git switch "${BRANCH}" 2>/dev/null || git checkout -B "${BRANCH}" "origin/${BRANCH}"
+
+          REPORT_DIR='${{ env.WORKDIR }}/reports'
+          if [ ! -d "${REPORT_DIR}" ] || [ -z "$(ls -A "${REPORT_DIR}" 2>/dev/null || true)" ]; then
+            echo "No report files to commit."
+            exit 0
+          fi
+
+          git add -A "${REPORT_DIR}"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add ${{ env.WORKDIR }}/reports/*
-          git diff --cached --quiet && echo "No report changes to commit" && exit 0
-          git commit -m "chore(drift): add CSV report for ${{ github.sha }}"
-          git push origin "HEAD:${BRANCH}"
+          git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]"
+          git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${BRANCH}"
 
       - name:  Fail PR if Drift Detected
         if: failure()
