@@ -6,6 +6,11 @@ on:
     paths:
       - 'Helm-Drift-Detector/**'
       - '.github/workflows/**'
+  push:
+    branches: ['**']                 # ensures bot CSV commits also run CI
+    paths:
+      - 'Helm-Drift-Detector/**'
+      - '.github/workflows/**'
 
 permissions:
   contents: write
@@ -68,7 +73,6 @@ jobs:
           name: drift-report
           path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
 
-      # Build CSV from drift.log (always run)
       - name: Build CSV drift report
         if: always()
         working-directory: ${{ env.WORKDIR }}
@@ -76,9 +80,19 @@ jobs:
           set -euo pipefail
           bash ./scripts/log_to_csv.sh   # writes reports/drift_report_<ts>.csv and copies drift.log
 
-      # Commit CSV to the PR branch (no loop; skip when actor is the bot)
+      # --- Debug so you can see reports/ before commit ---
+      - name: 🔍 Show generated reports
+        if: always()
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set -euxo pipefail
+          ls -la reports || true
+          echo "--- git status (before commit) ---"
+          git status
+
+      # --- Commit CSV back to PR branch (no loop; skip when actor is the bot) ---
       - name: Commit CSV to PR branch
-        if: always() && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -106,7 +120,7 @@ jobs:
           git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${BRANCH}"
 
       - name: Fail PR if Drift Detected
-        if: failure()
+        if: failure() && github.event_name == 'pull_request'
         run: |
           echo " DRIFT DETECTED. Failing build."
           exit 1
