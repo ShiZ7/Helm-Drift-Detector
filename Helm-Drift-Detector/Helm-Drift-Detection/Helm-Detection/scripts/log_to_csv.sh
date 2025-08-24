@@ -3,7 +3,7 @@
 # Columns: timestamp,namespace,resource_type,resource_name,field,declared,observed,editor
 set -euo pipefail
 
-# your known names
+# Known resources
 ns="sandbox-nginx"
 hpa_name="test-nginx"
 svc_name="test-nginx"
@@ -17,10 +17,10 @@ out="drift.csv"
 out_dir="reports"
 mkdir -p "$out_dir"
 
-# header
+# Header
 echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$out"
 
-# if no log, emit one row (keeps CSV consistent)
+# No log → still emit a row
 if [ ! -s "$in" ]; then
   echo "$ts_iso,$ns,-,-,no_drift,-,-,$editor" >> "$out"
 else
@@ -35,17 +35,17 @@ else
       detail="$line"
       prev_is_drift=0
 
-      # field name (before "(")
+      # Field name (before '('), trim
       field=$(echo "$detail" | awk -F'(' '{print $1}' | sed -E 's/[[:space:]]+$//')
 
-      # values (support Local/Live or Declared/Observed)
+      # Values (Local/Live or Declared/Observed)
       declared=$(echo "$detail" | sed -nE 's/.*[Ll]ocal=([^,]+).*/\1/p')
       observed=$(echo "$detail" | sed -nE 's/.*[Ll]ive=([^)]+).*/\1/p')
       [ -z "${declared:-}" ] && declared=$(echo "$detail" | sed -nE 's/.*[Dd]eclared=([^,]+).*/\1/p')
       [ -z "${observed:-}" ] && observed=$(echo "$detail" | sed -nE 's/.*[Oo]bserved=([^)]+).*/\1/p')
       declared=${declared:-"-"}; observed=${observed:-"-"}
 
-      # map to resource
+      # Map to resource
       if echo "$field" | grep -qiE 'replica|cpu|averageUtilization'; then
         rt="HPA"; rn="$hpa_name"
       elif echo "$field" | grep -qiE 'port'; then
@@ -58,12 +58,12 @@ else
     fi
   done < "$in"
 
-  # if only header exists, write explicit no_drift
+  # If header only, emit no_drift row
   lines=$(wc -l < "$out" | tr -d ' ')
   [ "$lines" -le 1 ] && echo "$ts_iso,$ns,-,-,no_drift,-,-,$editor" >> "$out"
 fi
 
-# timestamped copies into reports/
+# Save timestamped copies
 cp "$out" "$out_dir/drift_report_${ts_file}.csv"
 [ -f "$in" ] && cp "$in" "$out_dir/drift_${ts_file}.log" || true
 
