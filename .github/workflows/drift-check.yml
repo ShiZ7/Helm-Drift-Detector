@@ -8,7 +8,7 @@ on:
       - '.github/workflows/**'
 
 permissions:
-  contents: write           # allow committing CSV into the PR branch
+  contents: write
   pull-requests: write
 
 env:
@@ -68,7 +68,7 @@ jobs:
           name: drift-report
           path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
 
-      # --- CSV generation (no chmod needed; call with bash) ---
+      # Build CSV from drift.log (always run)
       - name: Build CSV drift report
         if: always()
         working-directory: ${{ env.WORKDIR }}
@@ -76,7 +76,7 @@ jobs:
           set -euo pipefail
           bash ./scripts/log_to_csv.sh   # writes reports/drift_report_<ts>.csv and copies drift.log
 
-      # --- Commit CSV back to PR branch (resilient) ---
+      # Commit CSV to the PR branch (no loop; skip when actor is the bot)
       - name: Commit CSV to PR branch
         if: always() && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
         env:
@@ -102,7 +102,7 @@ jobs:
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]"
+          git commit -m "chore(drift): add CSV report for ${{ github.sha }}"
           git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${BRANCH}"
 
       - name: Fail PR if Drift Detected
