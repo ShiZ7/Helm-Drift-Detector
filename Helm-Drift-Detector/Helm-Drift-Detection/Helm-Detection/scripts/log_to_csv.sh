@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Converts drift.log -> reports/drift_report_<timestamp>.csv
-# Output columns: timestamp,namespace,resource_type,resource_name,field,declared,observed,editor
-
+# Converts drift.log -> CSV and stores timestamped copies in reports/
+# Columns: timestamp,namespace,resource_type,resource_name,field,declared,observed,editor
 set -euo pipefail
 
-
+# Your known names
 ns="sandbox-nginx"
 hpa_name="test-nginx"
 svc_name="test-nginx"
@@ -18,42 +17,37 @@ out="drift.csv"
 out_dir="reports"
 mkdir -p "$out_dir"
 
-
+# Header
 echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$out"
 
-# If there's no log, still emit a "no drift" row
+# If there's no log, still emit one row
 if [ ! -s "$in" ]; then
   echo "$ts_iso,$ns,-,-,no_drift,-,-,$editor" >> "$out"
 else
-
   prev_is_drift=0
   while IFS= read -r line || [ -n "$line" ]; do
+    # detect a DRIFT block line
     if echo "$line" | grep -qE '^[[:space:]]*DRIFT:'; then
       prev_is_drift=1
       continue
     fi
 
+    # read the details line after DRIFT:
     if [ $prev_is_drift -eq 1 ]; then
       detail="$line"
       prev_is_drift=0
 
-      # field name (strip text after "(" and trim)
-      field=$(echo "$detail" | awk -F'(' '{print $1}' | sed -E 's/[[:space:]]+$//' )
+      # field name (left side before "("), trim trailing spaces
+      field=$(echo "$detail" | awk -F'(' '{print $1}' | sed -E 's/[[:space:]]+$//')
 
-      # declared/observed (accept Local/Live or Declared/Observed tokens)
+      # values (support Local/Live or Declared/Observed)
       declared=$(echo "$detail" | sed -nE 's/.*[Ll]ocal=([^,]+).*/\1/p')
       observed=$(echo "$detail" | sed -nE 's/.*[Ll]ive=([^)]+).*/\1/p')
-      if [ -z "${declared:-}" ]; then
-        declared=$(echo "$detail" | sed -nE 's/.*[Dd]eclared=([^,]+).*/\1/p')
-      fi
-      if [ -z "${observed:-}" ]; then
-        observed=$(echo "$detail" | sed -nE 's/.*[Oo]bserved=([^)]+).*/\1/p')
-      fi
-      # fallback if still empty
-      declared=${declared:-"-"}
-      observed=${observed:-"-"}
+      [ -z "${declared:-}" ] && declared=$(echo "$detail" | sed -nE 's/.*[Dd]eclared=([^,]+).*/\1/p')
+      [ -z "${observed:-}" ] && observed=$(echo "$detail" | sed -nE 's/.*[Oo]bserved=([^)]+).*/\1/p')
+      declared=${declared:-"-"}; observed=${observed:-"-"}
 
-      # resource mapping
+      # map to resource
       if echo "$field" | grep -qiE 'replica|cpu|averageUtilization'; then
         rt="HPA"; rn="$hpa_name"
       elif echo "$field" | grep -qiE 'port'; then
@@ -66,15 +60,13 @@ else
     fi
   done < "$in"
 
-  # If only header, add a no_drift row
+  # If only header exists, add explicit no_drift
   lines=$(wc -l < "$out" | tr -d ' ')
-  if [ "$lines" -le 1 ]; then
-    echo "$ts_iso,$ns,-,-,no_drift,-,-,$editor" >> "$out"
-  fi
+  [ "$lines" -le 1 ] && echo "$ts_iso,$ns,-,-,no_drift,-,-,$editor" >> "$out"
 fi
 
 # Timestamped copies into reports/
 cp "$out" "$out_dir/drift_report_${ts_file}.csv"
-[ -f "$in" ] && cp "$in"  "$out_dir/drift_${ts_file}.log" || true
+[ -f "$in" ] && cp "$in" "$out_dir/drift_${ts_file}.log" || true
 
 echo "CSV: $out_dir/drift_report_${ts_file}.csv"
