@@ -6,9 +6,12 @@ on:
     paths:
       - 'Helm-Drift-Detector/**'
       - '.github/workflows/**'
+   
+    paths-ignore:
+      - 'Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection/reports/**'
 
 permissions:
-  contents: read
+  contents: write          
   pull-requests: write
 
 env:
@@ -68,6 +71,28 @@ jobs:
         with:
           name: drift-report
           path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
+
+ 
+
+      - name:  Build CSV drift report
+        if: always()
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/log_to_csv.sh
+          ./scripts/log_to_csv.sh   # reads drift.log, writes reports/drift_report_<ts>.csv
+
+      - name:  Commit CSV to PR branch
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          set -euxo pipefail
+          BRANCH='${{ github.event.pull_request.head.ref }}'
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ${{ env.WORKDIR }}/reports/*
+          git diff --cached --quiet && echo "No report changes to commit" && exit 0
+          git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]"
+          git push origin "HEAD:${BRANCH}"
 
       - name:  Fail PR if Drift Detected
         if: failure()
