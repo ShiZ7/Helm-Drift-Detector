@@ -20,22 +20,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name:  Checkout Repo
+      - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name:  Authenticate to GCP (uses your JSON secret)
+      - name: Authenticate to GCP (uses your JSON secret)
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
 
-      - name:  Get GKE Credentials
+      - name: Get GKE Credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: cluster-1
           location: us-central1
           project_id: exchange-sandbox-2f1f
 
-      - name:  Install Helm + yq
+      - name: Install Helm + yq
         run: |
           curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           YQ_VERSION=v4.44.3
@@ -43,7 +43,7 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
           helm version && yq --version
 
-      - name:  Debug & verify files
+      - name: Debug & verify files
         run: |
           set -euxo pipefail
           echo "Workspace: $GITHUB_WORKSPACE"
@@ -55,29 +55,29 @@ jobs:
           test -f "$WORKDIR/scripts/detect-drift.sh"
           test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
 
-      - name:  Run Drift Detection Script
+      - name: Run Drift Detection Script
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euxo pipefail
           bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
 
-      - name:  Upload Drift Report
+      - name: Upload Drift Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: drift-report
           path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
 
-      # ---------- NEW: build CSV from drift.log ----------
-      - name:  Build CSV drift report
+      # --- CSV generation (no chmod needed; call with bash) ---
+      - name: Build CSV drift report
         if: always()
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euo pipefail
           bash ./scripts/log_to_csv.sh   # writes reports/drift_report_<ts>.csv and copies drift.log
 
-      # ---------- NEW: commit CSV back to PR branch (resilient) ----------
-      - name:  Commit CSV to PR branch
+      # --- Commit CSV back to PR branch (resilient) ---
+      - name: Commit CSV to PR branch
         if: always() && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -85,7 +85,6 @@ jobs:
           set -euxo pipefail
           BRANCH='${{ github.event.pull_request.head.ref }}'
 
-          # ensure we're on the PR head branch (avoid detached HEAD)
           git fetch origin "${BRANCH}" --depth=1
           git switch "${BRANCH}" 2>/dev/null || git checkout -B "${BRANCH}" "origin/${BRANCH}"
 
@@ -106,7 +105,7 @@ jobs:
           git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]"
           git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${BRANCH}"
 
-      - name:  Fail PR if Drift Detected
+      - name: Fail PR if Drift Detected
         if: failure()
         run: |
           echo " DRIFT DETECTED. Failing build."
