@@ -8,8 +8,8 @@ spec:
   type: 
   ports:
     - name: http
-      port: 80
-      targetPort: 8080
+      port: 89
+      targetPort: 7070
       protocol: TCP
   selector:
     app: test-nginx
@@ -22,7 +22,7 @@ metadata:
   namespace: sandbox-nginx
 spec:
   minReplicas: 6
-  maxReplicas: 8
+  maxReplicas: 12
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
@@ -31,6 +31,6 @@ spec:
   - resource:
       name: cpu
       target:
-        averageUtilization: 100
+        averageUtilization: 88
         type: Utilization
     type: Resource
