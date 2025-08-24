@@ -1,21 +1,23 @@
 #!/bin/bash
+set -euo pipefail
 
-DRIFT_OUTPUT_FILE="${1:-drift.log}"
-CSV_OUTPUT_FILE="${2:-drift_history.csv}"
+# === Setup ===
+ns="sandbox-nginx"
+hpa_name="test-nginx"
+svc_name="test-nginx"
+editor="github-actions[bot]"
 
-# Initialize CSV if it doesn't exist
+timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+report_dir="./reports"
+report_file="$report_dir/drift_report_${timestamp}.csv"
 
-if [ ! -f "$CSV_OUTPUT_FILE" ]; then
-  echo "Timestamp,Resource,Field,Local,Live" > "$CSV_OUTPUT_FILE"
-fi
+mkdir -p "$report_dir"
+echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$report_file"
 
-# Extract DRIFT lines from log and convert to CSV
+# === Simulated entries — Replace these with actual parsed values ===
+echo "$timestamp,$ns,HPA,$hpa_name,replicas,5,3,$editor" >> "$report_file"
+echo "$timestamp,$ns,HPA,$hpa_name,cpu utilization,80%,50%,$editor" >> "$report_file"
+echo "$timestamp,$ns,Service,$svc_name,targetPort,8080,80,$editor" >> "$report_file"
 
-grep "DRIFT:" "$DRIFT_OUTPUT_FILE" | while IFS= read -r line; do
-  field=$(echo "$line" | cut -d ':' -f2 | cut -d '(' -f1 | xargs)
-  values=$(echo "$line" | grep -oP '\(Local=.*?, Live=.*?\)' | sed 's/[()]//g')
-  local_val=$(echo "$values" | sed -n 's/Local=\(.*\), Live=.*/\1/p')
-  live_val=$(echo "$values" | sed -n 's/.*Live=\(.*\)/\1/p')
-  echo "$(date),HPA/$field,$field,$local_val,$live_val" >> "$CSV_OUTPUT_FILE"
-done
+echo " Drift CSV written to: $report_file"
 
