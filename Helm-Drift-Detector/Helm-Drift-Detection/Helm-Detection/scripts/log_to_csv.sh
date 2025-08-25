@@ -30,7 +30,7 @@ ts() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
 while IFS= read -r line; do
   [[ "$line" =~ ^[[:space:]]*DRIFT: ]] && continue
 
-  if [[ "$line" =~ Local=([^,]+),[[:space:]]Live=([^)]+)\) ]]; then
+  if [[ "$line" =~ Local\=([^,]+),[[:space:]]Live\=([^)]+)\) ]]; then
     local_val="${BASH_REMATCH[1]}"
     live_val="${BASH_REMATCH[2]}"
 
