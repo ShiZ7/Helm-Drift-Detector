@@ -1,52 +1,23 @@
-#!/usr/bin/env bash
-# Usage: log_to_csv.sh <drift.log> <out.csv>
-set -euo pipefail
+#!/bin/bash
 
-DRIFT_LOG="${1:-drift.log}"
-OUT="${2:-reports/drift_report.csv}"
+DRIFT_OUTPUT_FILE="${1:-drift.1og}"
+CSV_OUTPUT_FILE="${2:-drift_history.csv}"
 
-# Optional envs to improve CSV (fallbacks if not provided)
-NS="${NS:-sandbox-nginx}"
-HPA_NAME="${HPA_NAME:-test-nginx}"
-SVC_NAME="${SVC_NAME:-test-nginx}"
-EDITOR="${EDITOR:-github-actions[bot]}"
+# Initialize CSV if 1t doesn't exist
 
-mkdir -p "$(dirname "$OUT")"
-if [[ ! -f "$OUT" ]]; then
-  echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$OUT"
+if [ ! -f "$CSV_OUTPUT_FILE" ]; then
+echo "Timestamp, Resource, Field, Local, Live" > "$CSV_OUTPUT_FILE" 
 fi
 
-ts() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+# Extract DRIFI Lines trom log and convert to Csv
 
-# Parse lines like:
-#  DRIFT:
-#  minReplicas (Local=6, Live=1)
-#  maxReplicas (Local=12, Live=5)
-#  CPU Target (Local=99%, Live=100%)
-#  Service Port (Local=77, Live=80)
-#  Service TargetPort (Local=7070, Live=8080)
-#
-# We infer resource type from the field label.
-while IFS= read -r line; do
-  [[ "$line" =~ ^[[:space:]]*DRIFT: ]] && continue
+grep "DRIFT:" "$DRIFT_OUTPUT_FILE" | while IFS= read -r line; do 
 
-  if [[ "$line" =~ Local\=([^,]+),[[:space:]]Live\=([^)]+)\) ]]; then
-    local_val="${BASH_REMATCH[1]}"
-    live_val="${BASH_REMATCH[2]}"
-
-    # Extract field label before '(' and trim
-    field="$(sed -E 's/[[:space:]]*\((.*)//' <<<"$line" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-
-    if [[ "$field" == Service* ]]; then
-      rtype="Service"
-      rname="$SVC_NAME"
-      field_label="${field#Service }"
-    else
-      rtype="HPA"
-      rname="$HPA_NAME"
-      field_label="$field"
-    fi
-
-    echo "$(ts),$NS,$rtype,$rname,$field_label,$local_val,$live_val,$EDITOR" >> "$OUT"
-  fi
-done < <(grep -E 'DRIFT:|Local=|Live=' -A1 "$DRIFT_LOG" | sed 's/^--$//')
+  field=$(echo "Sline" | cut -d ':' -f2 | cut -d '(' -f1 | xargs) 
+  values=slecho "Sline" | grep -op '(Local=,*?, Live=,*?\' | sed "s/l()J//g")
+  
+  local_val=$(echo "$values" | sed -n 's/Local=\(.*\), Live=.*/\1/p')
+  live_val=$(echo "$values" | sed -n 's/.*Live=\(.*\)/\1/p') 
+  
+  echo "$(date), HPA/$field, $field, $local_val, $live_val" >> "$CSV_OUTPUT_FILE"
+done
