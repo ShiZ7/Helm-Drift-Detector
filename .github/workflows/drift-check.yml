@@ -3,13 +3,13 @@ name: Helm Drift Detection
 on:
   pull_request:
     branches: [ main, master ]
-    # IMPORTANT: use only 'paths' (no paths-ignore on the same event)
+    # IMPORTANT: only 'paths' (no paths-ignore on the same event)
     paths:
       - 'Helm-Drift-Detector/**'
       - '.github/workflows/**'
 
 permissions:
-  contents: write       # we push CSV/log to a branch
+  contents: write       # needed to commit CSVs back to the branch
   pull-requests: write
 
 env:
@@ -79,11 +79,9 @@ jobs:
           mkdir -p reports
           ts="$(date -u +'%Y%m%dT%H%M%SZ')"
           csv="reports/drift_report_${ts}.csv"
-          # write CSV header
           echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$csv"
-          # Append from detect-drift output (the script already prints a structured DRIFT report)
           awk '
-            BEGIN{ns="sandbox-nginx"; res=""; name=""; field=""; local=""; live=""; who="'"${{ github.actor }}"'"; ts="'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'";}
+            BEGIN{ns="sandbox-nginx"; who="'"${{ github.actor }}"'"; ts="'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'";}
             /DRIFT:/{next}
             /minReplicas \(Local=/{res="HPA"; name="test-nginx"; field="minReplicas";
                match($0,/Local=([^,]+)/,a); local=a[1];
@@ -112,30 +110,24 @@ jobs:
         working-directory: ${{ env.WORKDIR }}
         run: |
           ls -la reports || true
-          echo "csv content:"
           (ls reports/*.csv && tail -n +1 -v reports/*.csv) || true
 
-      - name: Commit CSV to reports branch
+      # >>> This is the CHANGED step: commit CSV to the PR branch/mainline
+      - name: Commit CSV to PR branch (mainline)
         if: always()
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euxo pipefail
-          # Ensure git identity BEFORE the first commit
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Switch to a separate orphan branch so PR status checks don’t loop
           cd "$GITHUB_WORKSPACE"
-          git ls-remote --exit-code origin refs/heads/drift-reports || true
-          git checkout --orphan drift-reports
-          rm -rf .
-          mkdir -p "$WORKDIR/reports"
-          # bring the newly created CSV(s) from the checked-out workspace path
-          cp -r "$WORKDIR/reports" "$PWD/"
-
-          git add reports
-          git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]"
-          git push -f origin drift-reports
+          # Use the PR source branch when running on pull_request
+          BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF##*/}}"
+          git checkout "$BRANCH"
+          git add "$WORKDIR/reports"
+          # If there is nothing to commit, exit 0 so the job continues
+          git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]" || exit 0
+          git push
 
       - name: Fail PR if Drift Detected
         if: failure()
