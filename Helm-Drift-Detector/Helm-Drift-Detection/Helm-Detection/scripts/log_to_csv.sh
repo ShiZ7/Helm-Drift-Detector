@@ -1,44 +1,52 @@
 #!/usr/bin/env bash
+# Usage: log_to_csv.sh <drift.log> <out.csv>
 set -euo pipefail
 
 DRIFT_LOG="${1:-drift.log}"
-CSV_OUT="${2:-reports/drift_history.csv}"
+OUT="${2:-reports/drift_report.csv}"
 
-mkdir -p "$(dirname "$CSV_OUT")"
+# Optional envs to improve CSV (fallbacks if not provided)
+NS="${NS:-sandbox-nginx}"
+HPA_NAME="${HPA_NAME:-test-nginx}"
+SVC_NAME="${SVC_NAME:-test-nginx}"
+EDITOR="${EDITOR:-github-actions[bot]}"
 
-# header once
-if [ ! -f "$CSV_OUT" ]; then
-  echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$CSV_OUT"
+mkdir -p "$(dirname "$OUT")"
+if [[ ! -f "$OUT" ]]; then
+  echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$OUT"
 fi
 
-TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-NS="${NS:-default}"
-HPA="${HPA_NAME:-unknown}"
-SVC="${SVC_NAME:-unknown}"
-ED="${EDITOR:-unknown}"
+ts() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
 
-awk -v ts="$TS" -v ns="$NS" -v hpa="$HPA" -v svc="$SVC" -v ed="$ED" '
-/^DRIFT:/ {
-  # the next line contains: "<Field> (Local=..., Live=...)"
-  if (getline line) {
-    if (match(line,/^[[:space:]]*([^ (][^ (]*)[[:space:]]*\(([^)]*)\)/,m)) {
-      field=m[1]
-      pairs=m[2]
-      local=""; live=""
-      n = split(pairs, kv, ",")
-      for (i=1;i<=n;i++){
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", kv[i])
-        split(kv[i], p, "=")
-        if (p[1]=="Local") local=p[2]
-        if (p[1]=="Live")  live=p[2]
-      }
-      # classify
-      resType="HPA"; resName=hpa
-      if (index(field,"Service")==1) { resType="Service"; resName=svc; sub(/^Service[[:space:]]+/,"",field) }
-      printf "%s,%s,%s,%s,%s,%s,%s,%s\n", ts, ns, resType, resName, field, local, live, ed
-    }
-  }
-}
-' "$DRIFT_LOG" >> "$CSV_OUT"
+# Parse lines like:
+#  DRIFT:
+#  minReplicas (Local=6, Live=1)
+#  maxReplicas (Local=12, Live=5)
+#  CPU Target (Local=99%, Live=100%)
+#  Service Port (Local=77, Live=80)
+#  Service TargetPort (Local=7070, Live=8080)
+#
+# We infer resource type from the field label.
+while IFS= read -r line; do
+  [[ "$line" =~ ^[[:space:]]*DRIFT: ]] && continue
 
-echo "CSV written: $CSV_OUT"
+  if [[ "$line" =~ Local\=([^,]+),[[:space:]]Live\=([^)]+)\) ]]; then
+    local_val="${BASH_REMATCH[1]}"
+    live_val="${BASH_REMATCH[2]}"
+
+    # Extract field label before '(' and trim
+    field="$(sed -E 's/[[:space:]]*\((.*)//' <<<"$line" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+
+    if [[ "$field" == Service* ]]; then
+      rtype="Service"
+      rname="$SVC_NAME"
+      field_label="${field#Service }"
+    else
+      rtype="HPA"
+      rname="$HPA_NAME"
+      field_label="$field"
+    fi
+
+    echo "$(ts),$NS,$rtype,$rname,$field_label,$local_val,$live_val,$EDITOR" >> "$OUT"
+  fi
+done < <(grep -E 'DRIFT:|Local=|Live=' -A1 "$DRIFT_LOG" | sed 's/^--$//')
