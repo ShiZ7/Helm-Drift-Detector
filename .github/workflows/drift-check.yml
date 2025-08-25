@@ -74,7 +74,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: drift-report
-        path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
+        path: ${{ github.workspace }}/${{ env.WORKDIR }}/reports/drift_report_*.csv
 
     - name: Fail PR if Drift Detected
       if: failure()
