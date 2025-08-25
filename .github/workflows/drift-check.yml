@@ -8,15 +8,11 @@ on:
       - '.github/workflows/**'
 
 permissions:
-  contents: write          # needed to push CSV to drift-reports
+  contents: write         # we push CSVs to a branch
   pull-requests: write
 
 env:
   WORKDIR: Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection
-  # set these three to your real names if they differ
-  NS: sandbox-nginx
-  HPA_NAME: test-nginx
-  SVC_NAME: test-nginx
 
 jobs:
   detect-drift:
@@ -58,9 +54,11 @@ jobs:
           find "$WORKDIR" -maxdepth 3 -type f \( -name "detect-drift.sh" -o -name "desired.yaml" \) -print
           test -f "$WORKDIR/scripts/detect-drift.sh"
           test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
-          chmod +x "$WORKDIR/scripts/detect-drift.sh" "$WORKDIR/scripts/log_to_csv.sh"
+          chmod +x "$WORKDIR/scripts/detect-drift.sh"
+          chmod +x "$WORKDIR/scripts/log_to_csv.sh"
 
       - name: Run Drift Detection Script
+        id: drift
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euxo pipefail
@@ -71,33 +69,47 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: drift-report
-          path: ${{ env.WORKDIR }}/drift.log
+          path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
 
+      # ---------- CSV creation with a single, stable filename ----------
       - name: Build CSV drift report
+        id: build_csv
         working-directory: ${{ env.WORKDIR }}
         env:
           EDITOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          TS=$(date -u +"%Y%m%dT%H%M%SZ")
-          CSV_OUT="./reports/drift_report_${TS}.csv"
           mkdir -p ./reports
+          CSV_OUT="./reports/drift_report_$(date -u +"%Y%m%dT%H%M%SZ").csv"
           bash ./scripts/log_to_csv.sh ./drift.log "$CSV_OUT"
+          echo "csv_path=$CSV_OUT" >> "$GITHUB_OUTPUT"
           echo "CSV ready at $CSV_OUT"
 
-      # IMPORTANT: push to a SEPARATE branch so PR SHA is untouched (no duplicate checks)
+      - name: Show generated reports
+        if: always()
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set -euxo pipefail
+          ls -la ./reports || true
+          cat ./reports/*.csv || true
+
+      # ---------- Commit that exact CSV into 'drift-reports' branch ----------
+      # This does NOT create a PR; it just pushes the file for record-keeping.
       - name: Commit CSV to reports branch (drift-reports)
         if: always()
+        env:
+          CSV_FROM_WORKDIR: ${{ steps.build_csv.outputs.csv_path }}
         run: |
           set -euo pipefail
-          TS=$(date -u +"%Y%m%dT%H%M%SZ")
-          CSV_PATH="${{ env.WORKDIR }}/reports/drift_report_${TS}.csv"
+          CSV_PATH="$CSV_FROM_WORKDIR"
+          echo "Using CSV: $CSV_PATH"
+          [ -f "$CSV_PATH" ] || { echo "CSV not found at $CSV_PATH"; ls -R; exit 1; }
+
           tmp=/tmp/drift.csv
           cp "$CSV_PATH" "$tmp"
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git fetch origin
 
           if git ls-remote --exit-code --heads origin drift-reports >/dev/null 2>&1; then
@@ -108,7 +120,16 @@ jobs:
           fi
 
           mkdir -p "${{ env.WORKDIR }}/reports"
-          mv "$tmp" "${{ env.WORKDIR }}/reports/drift_report_${TS}.csv"
-          git add "${{ env.WORKDIR }}/reports/drift_report_${TS}.csv"
+          fname="$(basename "$CSV_PATH")"
+          mv "$tmp" "${{ env.WORKDIR }}/reports/$fname"
+
+          git add "${{ env.WORKDIR }}/reports/$fname"
           git commit -m "chore(drift): add CSV report for ${GITHUB_SHA::7} [skip ci]"
           git push -u origin drift-reports
+
+      # -------- Fail PR if drift was detected --------
+      - name: Fail PR if Drift Detected
+        if: failure() || steps.drift.outcome == 'failure'
+        run: |
+          echo " DRIFT DETECTED. Failing build."
+          exit 1
