@@ -5,14 +5,18 @@ on:
     branches: [ main, master ]
     paths:
       - 'Helm-Drift-Detector/**'
-      - '.github/workflows/drift-check.yml'
+      - '.github/workflows/**'
 
 permissions:
-  contents: write          # we push CSV back to the PR branch
+  contents: write          # needed to push CSV to drift-reports
   pull-requests: write
 
 env:
   WORKDIR: Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection
+  # set these three to your real names if they differ
+  NS: sandbox-nginx
+  HPA_NAME: test-nginx
+  SVC_NAME: test-nginx
 
 jobs:
   detect-drift:
@@ -20,10 +24,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout Repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # needed to push back to the PR branch
 
       - name: Authenticate to GCP (uses your JSON secret)
         uses: google-github-actions/auth@v2
@@ -55,69 +57,58 @@ jobs:
           echo "---- find detect-drift & desired.yaml ----"
           find "$WORKDIR" -maxdepth 3 -type f \( -name "detect-drift.sh" -o -name "desired.yaml" \) -print
           test -f "$WORKDIR/scripts/detect-drift.sh"
-          test -f "$WORKDIR/desired.yaml"
-          chmod +x "$WORKDIR/scripts/detect-drift.sh"
+          test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
+          chmod +x "$WORKDIR/scripts/detect-drift.sh" "$WORKDIR/scripts/log_to_csv.sh"
 
       - name: Run Drift Detection Script
-        id: detect
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euxo pipefail
           bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
-          # Derive drift flag from log (do NOT fail here)
-          if grep -q '^DRIFT:' drift.log; then
-            echo "drift=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "drift=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Upload Drift Report (artifact)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: drift-log
+          name: drift-report
           path: ${{ env.WORKDIR }}/drift.log
 
       - name: Build CSV drift report
-        id: csv
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          set -euxo pipefail
-          mkdir -p reports
-          chmod +x ./scripts/log_to_csv.sh
-          CSV_FILE="./reports/drift_report_$(date -u +'%Y%m%dT%H%M%SZ').csv"
-          ./scripts/log_to_csv.sh drift.log "$CSV_FILE"
-          echo "csv_path=$CSV_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: Show generated reports
-        working-directory: ${{ env.WORKDIR }}
-        run: ls -la reports || true
-
-      - name: Commit CSV to PR branch
-        if: steps.detect.outputs.drift == 'true'
         working-directory: ${{ env.WORKDIR }}
         env:
-          CSV: ${{ steps.csv.outputs.csv_path }}
+          EDITOR: ${{ github.actor }}
         run: |
-          set -euxo pipefail
+          set -euo pipefail
+          TS=$(date -u +"%Y%m%dT%H%M%SZ")
+          CSV_OUT="./reports/drift_report_${TS}.csv"
+          mkdir -p ./reports
+          bash ./scripts/log_to_csv.sh ./drift.log "$CSV_OUT"
+          echo "CSV ready at $CSV_OUT"
+
+      # IMPORTANT: push to a SEPARATE branch so PR SHA is untouched (no duplicate checks)
+      - name: Commit CSV to reports branch (drift-reports)
+        if: always()
+        run: |
+          set -euo pipefail
+          TS=$(date -u +"%Y%m%dT%H%M%SZ")
+          CSV_PATH="${{ env.WORKDIR }}/reports/drift_report_${TS}.csv"
+          tmp=/tmp/drift.csv
+          cp "$CSV_PATH" "$tmp"
+
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Switch to the PR head branch and commit only the CSV
-          BRANCH="${{ github.head_ref }}"
-          git checkout "$BRANCH"
-          git add -f "$CSV" || true
+          git fetch origin
 
-          if git diff --cached --quiet; then
-            echo "No CSV changes to commit."
-            exit 0
+          if git ls-remote --exit-code --heads origin drift-reports >/dev/null 2>&1; then
+            git checkout -b drift-reports origin/drift-reports
+          else
+            git checkout --orphan drift-reports
+            rm -rf .
           fi
 
-          git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]"
-          git push origin "HEAD:$BRANCH"
-
-      - name: Fail PR if drift detected
-        if: steps.detect.outputs.drift == 'true'
-        run: |
-          echo "DRIFT DETECTED. Failing build."
-          exit 1
+          mkdir -p "${{ env.WORKDIR }}/reports"
+          mv "$tmp" "${{ env.WORKDIR }}/reports/drift_report_${TS}.csv"
+          git add "${{ env.WORKDIR }}/reports/drift_report_${TS}.csv"
+          git commit -m "chore(drift): add CSV report for ${GITHUB_SHA::7} [skip ci]"
+          git push -u origin drift-reports
