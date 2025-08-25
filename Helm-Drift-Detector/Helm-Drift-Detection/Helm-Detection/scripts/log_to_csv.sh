@@ -3,7 +3,6 @@
 # Columns: timestamp,namespace,resource_type,resource_name,field,declared,observed,editor
 set -euo pipefail
 
-# Adjust if your names differ
 ns="sandbox-nginx"
 hpa_name="test-nginx"
 svc_name="test-nginx"
