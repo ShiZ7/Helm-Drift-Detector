@@ -1,23 +1,23 @@
 #!/bin/bash
 
-DRIFT_OUTPUT_FILE="${1:-drift.log}"
+DRIFT_OUTPUT_FILE="${1:-drift.1og}"
 CSV_OUTPUT_FILE="${2:-drift_history.csv}"
 
-# Initialize CSV if it doesn't exist
+# Initialize CSV if 1t doesn't exist
+
 if [ ! -f "$CSV_OUTPUT_FILE" ]; then
-  echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$CSV_OUTPUT_FILE"
+echo "Timestamp, Resource, Field, Local, Live" > "$CSV_OUTPUT_FILE" 
 fi
 
-# Extract DRIFT lines from log and convert to CSV
-grep "DRIFT:" "$DRIFT_OUTPUT_FILE" | while IFS= read -r line; do
-  timestamp=$(date +'%Y-%m-%dT%H:%M:%SZ')
-  namespace="sandbox-nginx"  # Adjust this as per your environment
-  resource_type="HPA"  # Adjust as needed based on your setup (e.g., HPA, Service)
-  resource_name=$(echo "$line" | grep -oP '(?<=HPA/)[^ ]*')  # Adjust based on the line
-  field=$(echo "$line" | cut -d ':' -f2 | cut -d '(' -f1 | xargs) 
-  declared=$(echo "$line" | grep -oP '(?<=declared=)[^,]*')
-  observed=$(echo "$line" | grep -oP '(?<=observed=)[^,]*')
-  editor=$(echo "$line" | grep -oP '(?<=editor=)[^,]*')
+# Extract DRIFI Lines trom log and convert to Csv
 
-  echo "$timestamp,$namespace,$resource_type,$resource_name,$field,$declared,$observed,$editor" >> "$CSV_OUTPUT_FILE"
+grep "DRIFT:" "$DRIFT_OUTPUT_FILE" | while IFS= read -r line; do 
+
+  field=$(echo "Sline" | cut -d ':' -f2 | cut -d '(' -f1 | xargs) 
+  values=slecho "Sline" | grep -op '(Local=,*?, Live=,*?\' | sed "s/l()J//g")
+  
+  local_val=$(echo "$values" | sed -n 's/Local=\(.*\), Live=.*/\1/p')
+  live_val=$(echo "$values" | sed -n 's/.*Live=\(.*\)/\1/p') 
+  
+  echo "$(date), HPA/$field, $field, $local_val, $live_val" >> "$CSV_OUTPUT_FILE"
 done
