@@ -3,7 +3,7 @@ name: Helm Drift Detection
 on:
   pull_request:
     branches: [ main, master ]
-    # Ignore report files so committing CSVs elsewhere won't retrigger PR runs
+    # Avoid retriggering when the workflow commits reports
     paths-ignore:
       - 'Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection/reports/**'
 
@@ -58,7 +58,7 @@ jobs:
           test -f "$WORKDIR/scripts/detect-drift.sh"
           test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
 
-      # Run detect; don't fail the job immediately so we can still publish CSV.
+      # Let the step complete even on drift so we can still publish CSV
       - name: Run Drift Detection Script
         id: detect
         continue-on-error: true
@@ -79,7 +79,7 @@ jobs:
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euo pipefail
-          bash ./scripts/log_to_csv.sh   # writes reports/drift_report_<ts>.csv and copies drift.log
+          bash ./scripts/log_to_csv.sh
 
       - name: 🔍 Show generated reports
         if: always()
@@ -88,7 +88,6 @@ jobs:
           set -euxo pipefail
           ls -la reports || true
 
-      # Commit CSV to a separate branch so PR SHA doesn't change
       - name: Commit CSV to reports branch
         if: always()
         env:
@@ -97,31 +96,32 @@ jobs:
           set -euxo pipefail
           cd "${{ github.workspace }}"
 
-          # ensure reports branch
-          if git ls-remote --exit-code origin "refs/heads/${REPORT_BRANCH}"; then
-            git checkout -B "${REPORT_BRANCH}" "origin/${REPORT_BRANCH}"
+          # Ensure the reports branch exists
+          if git ls-remote --exit-code origin refs/heads/${REPORT_BRANCH}; then
+            git fetch origin ${REPORT_BRANCH}:${REPORT_BRANCH}
+            git checkout ${REPORT_BRANCH}
           else
-            git checkout --orphan "${REPORT_BRANCH}"
-            rm -rf *
+            git checkout --orphan ${REPORT_BRANCH}
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git commit --allow-empty -m "init reports branch"
-            git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" "${REPORT_BRANCH}"
+            git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" ${REPORT_BRANCH}
           fi
 
-          # copy reports from the run workspace
+          # Copy reports from the workflow workspace
           mkdir -p "${{ env.WORKDIR }}/reports"
           rsync -a "${GITHUB_WORKSPACE}/${{ env.WORKDIR }}/reports/" "${{ env.WORKDIR }}/reports/" || true
 
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A "${{ env.WORKDIR }}/reports"
           if git diff --cached --quiet; then
             echo "No report changes to commit."
           else
-            git config user.name  "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]"
-            git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" "${REPORT_BRANCH}"
+            git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" ${REPORT_BRANCH}
           fi
 
-      # Final: fail the PR when drift was detected (matches your earlier behavior)
       - name: Fail PR if Drift Detected
         if: github.event_name == 'pull_request' && steps.detect.outcome == 'failure'
         run: |
