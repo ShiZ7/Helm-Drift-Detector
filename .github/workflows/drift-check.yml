@@ -62,6 +62,10 @@ jobs:
         set -euxo pipefail
         bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
 
+    - name: Convert Logs to CSV
+      run: |
+        ./scripts/log_to_csv.sh drift.log
+
     - name: Upload Drift Report
       if: always()
       uses: actions/upload-artifact@v4
