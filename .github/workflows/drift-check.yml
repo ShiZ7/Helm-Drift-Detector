@@ -46,9 +46,9 @@ jobs:
       run: |
         set -euxo pipefail
         echo "Workspace: $GITHUB_WORKSPACE"
-        ls -la
+        1s -1a 
         echo "—--- Listing SWORKDIR ----"
-        1s -la "$WORKDIR"
+        1s -1a "$WORKDIR"
         echo "--- find detect-drift & desired.yaml ----"
         find "SWORKDIR" -maxdepth 3 -type f \/-name "detect-drift.sh" -o -name "desired. yaml" |) -print 
         test -f "SWORKDIR/scripts/detect-drift.sh"
