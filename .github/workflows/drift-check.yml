@@ -3,17 +3,19 @@ name: Helm Drift Detection
 on:
   pull_request:
     branches: [ main, master ]
-    # Avoid retriggering when the workflow commits reports
+    paths:
+      - 'Helm-Drift-Detector/**'
+      - '.github/workflows/**'
+    # Do NOT retrigger on logs/reports we write back to the PR branch
     paths-ignore:
       - 'Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection/reports/**'
 
 permissions:
-  contents: write
+  contents: write       # we push CSV/log to branches
   pull-requests: write
 
 env:
   WORKDIR: Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection
-  REPORT_BRANCH: drift-reports
 
 jobs:
   detect-drift:
@@ -21,24 +23,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repo
+      - name:  Checkout Repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Authenticate to GCP (uses your JSON secret)
+      - name:  Authenticate to GCP (uses your JSON secret)
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
 
-      - name: Get GKE Credentials
+      - name:  Get GKE Credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: cluster-1
           location: us-central1
           project_id: exchange-sandbox-2f1f
 
-      - name: Install Helm + yq
+      - name:  Install Helm + yq
         run: |
           curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           YQ_VERSION=v4.44.3
@@ -46,7 +48,7 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
           helm version && yq --version
 
-      - name: Debug & verify files
+      - name:  Debug & verify files
         run: |
           set -euxo pipefail
           echo "Workspace: $GITHUB_WORKSPACE"
@@ -57,73 +59,102 @@ jobs:
           find "$WORKDIR" -maxdepth 3 -type f \( -name "detect-drift.sh" -o -name "desired.yaml" \) -print
           test -f "$WORKDIR/scripts/detect-drift.sh"
           test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
+          chmod +x "$WORKDIR/scripts/detect-drift.sh" "$WORKDIR/scripts/log_to_csv.sh"
 
-      # Let the step complete even on drift so we can still publish CSV
-      - name: Run Drift Detection Script
-        id: detect
+      - name:  Run Drift Detection Script
+        id: run_drift
+        working-directory: ${{ env.WORKDIR }}
         continue-on-error: true
+        run: |
+          set -euxo pipefail
+          mkdir -p reports
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          echo "TS=$TS" >> "$GITHUB_OUTPUT"
+          # save raw log alongside CSV later
+          bash ./scripts/detect-drift.sh ./desired.yaml | tee "reports/drift_${TS}.log"
+
+      - name:  Build CSV drift report
+        if: always()
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euxo pipefail
-          bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
+          chmod +x ./scripts/log_to_csv.sh
+          ./scripts/log_to_csv.sh "reports/drift_${{ steps.run_drift.outputs.TS }}.log" \
+                                  "reports/drift_report_${{ steps.run_drift.outputs.TS }}.csv"
+          echo "CSV built at: reports/drift_report_${{ steps.run_drift.outputs.TS }}.csv"
 
-      - name: Upload Drift Report (artifact)
+      - name:  Show generated reports
+        if: always()
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          ls -la reports || true
+          head -n 50 "reports/drift_report_${{ steps.run_drift.outputs.TS }}.csv" || true
+
+      - name:  Upload Drift Report (artifact)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: drift-report
-          path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
+          path: |
+            ${{ env.WORKDIR }}/reports/drift_${{ steps.run_drift.outputs.TS }}.log
+            ${{ env.WORKDIR }}/reports/drift_report_${{ steps.run_drift.outputs.TS }}.csv
 
-      - name: Build CSV drift report
+      # ---- Commit report to dedicated audit branch (drift-reports) ----
+      - name: Commit CSV to reports branch (drift-reports)
         if: always()
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          set -euo pipefail
-          bash ./scripts/log_to_csv.sh
-
-      - name: 🔍 Show generated reports
-        if: always()
-        working-directory: ${{ env.WORKDIR }}
         run: |
           set -euxo pipefail
-          ls -la reports || true
+          cd "${{ github.workspace }}"
+          git fetch origin
+          # Create or switch to orphan branch
+          if git ls-remote --exit-code --heads origin drift-reports; then
+            git checkout -B drift-reports origin/drift-reports
+          else
+            git checkout --orphan drift-reports
+            rm -rf .
+          fi
 
-      - name: Commit CSV to reports branch
-        if: always()
+          mkdir -p "${{ env.WORKDIR }}/reports"
+          # copy the latest report files from the PR workspace
+          rsync -a "${{ env.WORKDIR }}/reports/" "${{ env.WORKDIR }}/reports/"
+
+          git add -A
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit on drift-reports."
+          else
+            git commit -m "drift: add CSV/log ${{ steps.run_drift.outputs.TS }} (from ${{ github.ref_name }})"
+            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" drift-reports:drift-reports
+          fi
+
+      # ---- ALSO commit into the PR branch so files appear in the PR ----
+      - name: Commit latest report into PR branch (head)
+        if: always() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
           cd "${{ github.workspace }}"
-
-          # Ensure the reports branch exists
-          if git ls-remote --exit-code origin refs/heads/${REPORT_BRANCH}; then
-            git fetch origin ${REPORT_BRANCH}:${REPORT_BRANCH}
-            git checkout ${REPORT_BRANCH}
-          else
-            git checkout --orphan ${REPORT_BRANCH}
-            git config user.name  "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit --allow-empty -m "init reports branch"
-            git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" ${REPORT_BRANCH}
-          fi
-
-          # Copy reports from the workflow workspace
+          git fetch origin "${{ github.head_ref }}":"${{ github.head_ref }}"
+          git checkout "${{ github.head_ref }}"
           mkdir -p "${{ env.WORKDIR }}/reports"
-          rsync -a "${GITHUB_WORKSPACE}/${{ env.WORKDIR }}/reports/" "${{ env.WORKDIR }}/reports/" || true
+          # Files already exist in the working tree; just ensure staged
+          git add -A "${{ env.WORKDIR }}/reports"
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A "${{ env.WORKDIR }}/reports"
+
           if git diff --cached --quiet; then
-            echo "No report changes to commit."
+            echo "No report changes to commit to PR branch."
           else
-            git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]"
-            git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" ${REPORT_BRANCH}
+            git commit -m "chore(drift): include latest CSV/log in PR [skip ci]"
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "${{ github.head_ref }}"
           fi
 
-      - name: Fail PR if Drift Detected
-        if: github.event_name == 'pull_request' && steps.detect.outcome == 'failure'
+      - name:  Fail PR if Drift Detected
+        if: always() && steps.run_drift.outcome == 'failure'
         run: |
           echo " DRIFT DETECTED. Failing build."
           exit 1
