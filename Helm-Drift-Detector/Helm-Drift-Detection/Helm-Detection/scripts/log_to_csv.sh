@@ -1,56 +1,82 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
-DRIFT_LOG="${1:-drift.log}"
-CSV_OUTPUT_FILE="${2:-reports/drift_history.csv}"
-EDITOR="${3:-${GITHUB_ACTOR:-unknown}}"
+LOG_FILE="${1:?pass drift.log}"
 
-: "${NAMESPACE:=sandbox-nginx}"
-: "${HPA_NAME:=test-nginx}"
-: "${SVC_NAME:=test-nginx}"
+CSV_OUT="${2:?pass output csv path}"
 
-mkdir -p "$(dirname "$CSV_OUTPUT_FILE")"
+mkdir -p "$(dirname "$CSV_OUT")"
 
-# Create header if file does not exist
-if [ ! -f "$CSV_OUTPUT_FILE" ]; then
-  echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$CSV_OUTPUT_FILE"
-fi
+# Header: keep short, as requested (no delta/severity columns)
 
-ts() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$CSV_OUT"
 
-# Parse "DRIFT:" blocks: expect the next non-empty line to contain:
-# "<Field> (Local=X, Live=Y)"
-while IFS= read -r line; do
-  if [[ "$line" =~ ^[[:space:]]*DRIFT: ]]; then
-    # read the next non-empty line
-    read -r next || true
-    # Skip blank lines between DRIFT: and the value line
-    while [[ -n "${next:-}" && "${next// }" == "" ]]; do
-      read -r next || true
-    done
+TS="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
-    # Extract: field, Local, Live
-    # Examples:
-    #   "minReplicas (Local=6, Live=1)"
-    #   "Service TargetPort (Local=5050, Live=8080)"
-    if [[ "${next:-}" =~ ^[[:space:]]*([^[:(]]+[^[:space:]])[[:space:]]*\(Local=([^,]+),[[:space:]]*Live=([^)]+)\) ]]; then
-      field="${BASH_REMATCH[1]}"
-      declared="$(echo "${BASH_REMATCH[2]}" | xargs)"
-      observed="$(echo "${BASH_REMATCH[3]}" | xargs)"
+EDITOR="${GITHUB_ACTOR:-github-actions[bot]}"
 
-      # Decide resource type/name based on the field label
-      case "$field" in
-        Service*|*Port*)
-          resource_type="Service"
-          resource_name="$SVC_NAME"
-          ;;
-        *)
-          resource_type="HPA"
-          resource_name="$HPA_NAME"
-          ;;
-      esac
+# You told me the names already
 
-      echo "$(ts),${NAMESPACE},${resource_type},${resource_name},${field},${declared},${observed},${EDITOR}" >> "$CSV_OUTPUT_FILE"
-    fi
-  fi
-done < "$DRIFT_LOG"
+NS="sandbox-nginx"
+
+HPA_NAME="test-nginx"
+
+SVC_NAME="test-nginx"
+
+# Map field -> resource type/name (based on how detect-drift.sh prints fields)
+
+map_field() {
+
+  case "$1" in
+
+    minReplicas|maxReplicas|"CPU Target") echo "HPA,$HPA_NAME" ;;
+
+    "Service Port"|"Service TargetPort")  echo "Service,$SVC_NAME" ;;
+
+    *)                                   echo "Unknown,unknown" ;;
+
+  esac
+
+}
+
+# Each drift is two lines in the log:
+
+# DRIFT:
+
+# <Field> (Local=..., Live=...)
+
+awk -v TS="$TS" -v NS="$NS" -v EDITOR="$EDITOR" '
+
+  BEGIN { driftSeen=0 }
+
+  /^DRIFT:/ { driftSeen=1; getline; line=$0;
+
+    # split into: field and values
+
+    field=line; sub(/ \(.*$/,"",field)
+
+    local=""; live=""
+
+    match(line,/Local=([^,)]*)/,a); if (a[1]!="") local=a[1];
+
+    match(line,/Live=([^)]*)/,b);   if (b[1]!="")   live=b[1];
+
+    # print a placeholder CSV row; resource gets filled by the shell mapper
+
+    printf("%s\t%s\t%s\t%s\t%s\n", field, local, live, TS, NS);
+
+  }
+
+' "$LOG_FILE" | while IFS=$'\t' read -r FIELD LOCAL LIVE TS NS; do
+
+  map=$(map_field "$FIELD")
+
+  TYPE=${map%%,*}
+
+  NAME=${map#*,}
+
+  echo "$TS,$NS,$TYPE,$NAME,$FIELD,$LOCAL,$LIVE,$EDITOR" >> "$CSV_OUT"
+
+done
+ 
