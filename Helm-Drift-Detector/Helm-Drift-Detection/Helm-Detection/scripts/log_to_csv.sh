@@ -40,7 +40,7 @@ else
       # field name before '('
       field=$(echo "$detail" | awk -F'(' '{print $1}' | sed -E 's/[[:space:]]+$//')
 
-      # values (both Local/Live and Declared/Observed notations supported)
+      # values (support Local/Live or Declared/Observed)
       declared=$(echo "$detail" | sed -nE 's/.*[Ll]ocal=([^,]+).*/\1/p')
       observed=$(echo "$detail" | sed -nE 's/.*[Ll]ive=([^)]+).*/\1/p')
       [ -z "${declared:-}" ] && declared=$(echo "$detail" | sed -nE 's/.*[Dd]eclared=([^,]+).*/\1/p')
