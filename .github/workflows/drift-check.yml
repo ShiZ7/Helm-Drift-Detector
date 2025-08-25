@@ -46,20 +46,20 @@ jobs:
       run: |
         set -euxo pipefail
         echo "Workspace: $GITHUB_WORKSPACE"
-        1s -1a 
-        echo "—--- Listing SWORKDIR ----"
-        1s -1a "$WORKDIR"
+        ls -la 
+        echo "—--- Listing $WORKDIR ----"
+        ls -la "$WORKDIR"
         echo "--- find detect-drift & desired.yaml ----"
-        find "SWORKDIR" -maxdepth 3 -type f \/-name "detect-drift.sh" -o -name "desired. yaml" |) -print 
-        test -f "SWORKDIR/scripts/detect-drift.sh"
-        test -f "SWORKDIR/desired.yaml" || (echo "desired.yaml missing in SWORKDIR" && exit 2) 
-        chmod +x "SWORKDIR/scripts/detect-drift.sh"
+        find "$WORKDIR" -maxdepth 3 -type f \( -name "detect-drift.sh" -o -name "desired.yaml" \) -print 
+        test -f "$WORKDIR/scripts/detect-drift.sh"
+        test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in SWORKDIR" && exit 2) 
+        chmod +x "$WORKDIR/scripts/detect-drift.sh"
         
     - name: Run Drift Detection Script 
       working-directory: ${{ env.WORKDIR }} 
       run: |
         set -euxo pipefail 
-        bash./scripts/detect-drift.sh./desired.yaml | tee drift.log
+        bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
         
     - name: Upload Drift Report
       if: always ()
