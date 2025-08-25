@@ -22,7 +22,7 @@ metadata:
   namespace: sandbox-nginx
 spec:
   minReplicas: 6
-  maxReplicas: 7
+  maxReplicas: 9
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
