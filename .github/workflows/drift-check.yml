@@ -6,11 +6,6 @@ on:
     paths:
       - 'Helm-Drift-Detector/**'
       - '.github/workflows/**'
-  push:
-    branches: ['**']                 # runs on bot CSV commits too
-    paths:
-      - 'Helm-Drift-Detector/**'
-      - '.github/workflows/**'
 
 permissions:
   contents: write
@@ -18,6 +13,7 @@ permissions:
 
 env:
   WORKDIR: Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection
+  REPORT_BRANCH: drift-reports        # <-- separate branch that stores CSVs
 
 jobs:
   detect-drift:
@@ -27,6 +23,8 @@ jobs:
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                # we will create/update REPORT_BRANCH
 
       - name: Authenticate to GCP (uses your JSON secret)
         uses: google-github-actions/auth@v2
@@ -60,15 +58,13 @@ jobs:
           test -f "$WORKDIR/scripts/detect-drift.sh"
           test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
 
-      # Do NOT fail the job if drift is detected; keep the run green
       - name: Run Drift Detection Script
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euxo pipefail
-          # Allow script to exit 2 without failing the step
-          ( bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log ) || true
+          bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
 
-      - name: Upload Drift Report
+      - name: Upload Drift Report (artifact)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -88,36 +84,49 @@ jobs:
         run: |
           set -euxo pipefail
           ls -la reports || true
-          echo "--- git status (before commit) ---"
-          git status
 
-      # Commit CSV back to PR branch (on PR runs only; no loop)
-      - name: Commit CSV to PR branch
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+      # Commit CSV to a dedicated reports branch (NOT the PR branch)
+      - name: Commit CSV to reports branch
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          BRANCH='${{ github.event.pull_request.head.ref }}'
+          cd "${{ github.workspace }}"
 
-          git fetch origin "${BRANCH}" --depth=1
-          git switch "${BRANCH}" 2>/dev/null || git checkout -B "${BRANCH}" "origin/${BRANCH}"
+          # make sure worktree is clean on the PR branch
+          git reset --hard
 
-          REPORT_DIR='${{ env.WORKDIR }}/reports'
-          if [ ! -d "${REPORT_DIR}" ] || [ -z "$(ls -A "${REPORT_DIR}" 2>/dev/null || true)" ]; then
-            echo "No report files to commit."
-            exit 0
+          # ensure reports branch exists locally
+          if git ls-remote --exit-code origin "refs/heads/${REPORT_BRANCH}"; then
+            git fetch origin "${REPORT_BRANCH}":"${REPORT_BRANCH}"
+            git switch "${REPORT_BRANCH}"
+          else
+            git switch --orphan "${REPORT_BRANCH}"
+            rm -rf .
+            git commit --allow-empty -m "init reports branch"
+            git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" "${REPORT_BRANCH}"
           fi
 
-          git add -A "${REPORT_DIR}"
+          # create target folder mirroring repo path
+          mkdir -p "${{ env.WORKDIR }}/reports"
+
+          # copy new files from the run workspace into the reports branch
+          rsync -a --delete "${GITHUB_WORKSPACE}/${{ env.WORKDIR }}/reports/" "${{ env.WORKDIR }}/reports/"
+
+          git add -A "${{ env.WORKDIR }}/reports"
           if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
+            echo "No report changes to commit."
+          else
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore(drift): add CSV report for ${{ github.sha }}"
+            git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" "${REPORT_BRANCH}"
           fi
 
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore(drift): add CSV report for ${{ github.sha }}"
-          git push "https://${GITHUB_ACTOR}:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${BRANCH}"
-
-      # ⛔️ Removed the 'Fail PR if Drift Detected' step so runs stay green
+      # Fail the PR if drift was detected (red X), like before
+      - name: Fail PR if Drift Detected
+        if: failure() && github.event_name == 'pull_request'
+        run: |
+          echo " DRIFT DETECTED. Failing build."
+          exit 1
