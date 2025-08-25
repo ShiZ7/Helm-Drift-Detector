@@ -3,17 +3,29 @@ name: Helm Drift Detection
 on:
   pull_request:
     branches: [ main, master ]
-    # IMPORTANT: only 'paths' (no paths-ignore on the same event)
     paths:
       - 'Helm-Drift-Detector/**'
       - '.github/workflows/**'
 
+# We push CSV files to the drift-reports branch, so we need contents: write.
 permissions:
-  contents: write       # needed to commit CSVs back to the branch
+  contents: write
   pull-requests: write
+
+# Make sure only the newest run per PR is active.
+concurrency:
+  group: drift-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   WORKDIR: Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection
+  REPORT_DIR: Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection/reports
+  REPORT_BRANCH: drift-reports
+
+  # If you want these detected automatically, keep as-is for now.
+  NAMESPACE: sandbox-nginx
+  HPA_NAME: test-nginx
+  SVC_NAME: test-nginx
 
 jobs:
   detect-drift:
@@ -21,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repo
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -40,6 +52,7 @@ jobs:
 
       - name: Install Helm + yq
         run: |
+          set -euxo pipefail
           curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           YQ_VERSION=v4.44.3
           sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
@@ -60,6 +73,7 @@ jobs:
           chmod +x "$WORKDIR/scripts/detect-drift.sh"
 
       - name: Run Drift Detection Script
+        id: run_drift
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euxo pipefail
@@ -69,66 +83,67 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: drift-report
-          path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
+          name: drift-log
+          path: ${{ env.WORKDIR }}/drift.log
 
       - name: Build CSV drift report
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          set -euxo pipefail
-          mkdir -p reports
-          ts="$(date -u +'%Y%m%dT%H%M%SZ')"
-          csv="reports/drift_report_${ts}.csv"
-          echo "timestamp,namespace,resource_type,resource_name,field,declared,observed,editor" > "$csv"
-          awk '
-            BEGIN{ns="sandbox-nginx"; who="'"${{ github.actor }}"'"; ts="'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'";}
-            /DRIFT:/{next}
-            /minReplicas \(Local=/{res="HPA"; name="test-nginx"; field="minReplicas";
-               match($0,/Local=([^,]+)/,a); local=a[1];
-               match($0,/Live=([^\\)]+)/,b); live=b[1];
-               print ts "," ns "," res "," name "," field "," local "," live "," who;}
-            /maxReplicas \(Local=/{res="HPA"; name="test-nginx"; field="maxReplicas";
-               match($0,/Local=([^,]+)/,a); local=a[1];
-               match($0,/Live=([^\\)]+)/,b); live=b[1];
-               print ts "," ns "," res "," name "," field "," local "," live "," who;}
-            /CPU Target \(Local=/{res="HPA"; name="test-nginx"; field="CPU Target";
-               match($0,/Local=([^,]+)/,a); local=a[1];
-               match($0,/Live=([^\\)]+)/,b); live=b[1];
-               print ts "," ns "," res "," name "," field "," local "," live "," who;}
-            /Service Port \(Local=/{res="Service"; name="test-nginx"; field="Service Port";
-               match($0,/Local=([^,]+)/,a); local=a[1];
-               match($0,/Live=([^\\)]+)/,b); live=b[1];
-               print ts "," ns "," res "," name "," field "," local "," live "," who;}
-            /Service TargetPort \(Local=/{res="Service"; name="test-nginx"; field="Service TargetPort";
-               match($0,/Local=([^,]+)/,a); local=a[1];
-               match($0,/Live=([^\\)]+)/,b); live=b[1];
-               print ts "," ns "," res "," name "," field "," local "," live "," who;}
-          ' drift.log >> "$csv"
-          echo "CSV built at $csv"
-
-      - name: Show generated reports
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          ls -la reports || true
-          (ls reports/*.csv && tail -n +1 -v reports/*.csv) || true
-
-      # >>> This is the CHANGED step: commit CSV to the PR branch/mainline
-      - name: Commit CSV to PR branch (mainline)
         if: always()
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euxo pipefail
+          mkdir -p reports
+          chmod +x ./scripts/log_to_csv.sh
+          # editor = PR author / actor
+          ./scripts/log_to_csv.sh "drift.log" "reports/drift_history.csv" "${GITHUB_ACTOR}"
+
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          cp reports/drift_history.csv "reports/drift_report_${TS}.csv"
+          echo "Created reports/drift_report_${TS}.csv"
+
+      - name: Show generated reports
+        if: always()
+        run: |
+          ls -la "${{ env.REPORT_DIR }}" || true
+
+      # IMPORTANT: we ONLY push reports to a separate branch.
+      # We DO NOT commit anything back to the PR branch (prevents the ghost “Expected” check).
+      - name: Commit CSV to reports branch
+        if: always()
+        run: |
+          set -euxo pipefail
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          REPORTS_DIR="${{ env.REPORT_DIR }}"
+
+          # Stash CSVs to /tmp before switching branches
+          cp "${REPORTS_DIR}/drift_history.csv" "/tmp/drift_history.csv" || true
+          cp "${REPORTS_DIR}"/drift_report_*.csv "/tmp/" || true
+
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          cd "$GITHUB_WORKSPACE"
-          # Use the PR source branch when running on pull_request
-          BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF##*/}}"
-          git checkout "$BRANCH"
-          git add "$WORKDIR/reports"
-          # If there is nothing to commit, exit 0 so the job continues
-          git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]" || exit 0
-          git push
 
+          git fetch origin
+
+          if git ls-remote --exit-code origin "refs/heads/${{ env.REPORT_BRANCH }}"; then
+            git switch "${{ env.REPORT_BRANCH }}"
+          else
+            git checkout --orphan "${{ env.REPORT_BRANCH }}"
+            rm -rf .
+            mkdir -p "${REPORTS_DIR}"
+            touch "${REPORTS_DIR}/.gitkeep"
+            git add -A
+            git commit -m "chore(drift): init ${REPORTS_DIR}"
+          fi
+
+          mkdir -p "${REPORTS_DIR}"
+          if [ -f /tmp/drift_history.csv ]; then cp /tmp/drift_history.csv "${REPORTS_DIR}/"; fi
+          shopt -s nullglob
+          for f in /tmp/drift_report_*.csv; do cp "$f" "${REPORTS_DIR}/"; done
+
+          git add "${REPORTS_DIR}"/*.csv || true
+          git commit -m "chore(drift): add CSV report for ${GITHUB_SHA}" || echo "nothing to commit"
+          git push origin "${{ env.REPORT_BRANCH }}"
+
+      # If the drift script exited non-zero, fail the PR.
       - name: Fail PR if Drift Detected
         if: failure()
         run: |
