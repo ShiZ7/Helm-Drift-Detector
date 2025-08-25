@@ -8,7 +8,7 @@ spec:
   type: 
   ports:
     - name: http
-      port: 40
+      port: 70
       targetPort: 7070
       protocol: TCP
   selector:
