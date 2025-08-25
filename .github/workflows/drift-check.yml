@@ -1,135 +1,77 @@
 name: Helm Drift Detection
 
-on:
-  pull_request:
-    branches: [ main, master ]
-    paths:
+on :
+   pull_request:
+      branches: [ main, master ] 
+      paths:
       - 'Helm-Drift-Detector/**'
       - '.github/workflows/**'
-
 permissions:
-  contents: write         # we push CSVs to a branch
+  contents: read
   pull-requests: write
-
+  
 env:
   WORKDIR: Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection
-
+  
 jobs:
   detect-drift:
-    name: Detect Drift in HPA/Service Config
+    name: Detect Drift in HPA/Service Config 
     runs-on: ubuntu-latest
-
+  
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v4
+    - name: Checkout Repo
+      uses: actions/checkout@v4
+      
+    - name: Authenticate to GCP (uses your JSON secret)
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
+        
+    - name: Get GKE Credentials 
+      uses: google-github-actions/get-gke-credentials@v2
+      with:
+        cluster_name: cluster-1
+        location: us-central1
+        project_id: exchange-sandbox-2f1f
+        
+    - name: Install Helm + ya 
+      run: |
+        curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        YQ_VERSION=V4.44.3
+        sudo wget -q0 /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+        sudo chmod +x /usr/local/bin/yq
+        helm version && yq --version
+        
+    - name:  Debug & verify files
+      run: |
+        set -euxo pipefail
+        echo "Workspace: $GITHUB_WORKSPACE"
+        ls -la
+        echo "—--- Listing SWORKDIR ----"
+        1s -la "$WORKDIR"
+        echo "--- find detect-drift & desired.yaml ----"
+        find "SWORKDIR" -maxdepth 3 -type f \/-name "detect-drift.sh" -o -name "desired. yaml" |) -print 
+        test -f "SWORKDIR/scripts/detect-drift.sh"
+        test -f "SWORKDIR/desired.yaml" || (echo "desired.yaml missing in SWORKDIR" && exit 2) 
+        chmod +x "SWORKDIR/scripts/detect-drift.sh"
+        
+    - name: Run Drift Detection Script 
+      working-directory: ${{ env.WORKDIR }} 
+      run: |
+        set -euxo pipefail 
+        bash./scripts/detect-drift.sh./desired.yaml | tee drift.log
+        
+    - name: Upload Drift Report
+      if: always ()
+      uses: actions/upload-artifact@v4
+      with:
+        name: drift-report
+        path: ${{ github.workspace 7}/${{ env.WORKDIR }}/drift.log
 
-      - name: Authenticate to GCP (uses your JSON secret)
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
+    - name: Fail PR 1f Drift Detected
+      if: failure()
+      run: | 
+        echo " DRIFT DETECTED. Failing build."
+        exit 1
 
-      - name: Get GKE Credentials
-        uses: google-github-actions/get-gke-credentials@v2
-        with:
-          cluster_name: cluster-1
-          location: us-central1
-          project_id: exchange-sandbox-2f1f
-
-      - name: Install Helm + yq
-        run: |
-          curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          YQ_VERSION=v4.44.3
-          sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
-          sudo chmod +x /usr/local/bin/yq
-          helm version && yq --version
-
-      - name: Debug & verify files
-        run: |
-          set -euxo pipefail
-          echo "Workspace: $GITHUB_WORKSPACE"
-          ls -la
-          echo "---- Listing $WORKDIR ----"
-          ls -la "$WORKDIR"
-          echo "---- find detect-drift & desired.yaml ----"
-          find "$WORKDIR" -maxdepth 3 -type f \( -name "detect-drift.sh" -o -name "desired.yaml" \) -print
-          test -f "$WORKDIR/scripts/detect-drift.sh"
-          test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in $WORKDIR" && exit 2)
-          chmod +x "$WORKDIR/scripts/detect-drift.sh"
-          chmod +x "$WORKDIR/scripts/log_to_csv.sh"
-
-      - name: Run Drift Detection Script
-        id: drift
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          set -euxo pipefail
-          bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
-
-      - name: Upload Drift Report (artifact)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: drift-report
-          path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
-
-      # ---------- CSV creation with a single, stable filename ----------
-      - name: Build CSV drift report
-        id: build_csv
-        working-directory: ${{ env.WORKDIR }}
-        env:
-          EDITOR: ${{ github.actor }}
-        run: |
-          set -euo pipefail
-          mkdir -p ./reports
-          CSV_OUT="./reports/drift_report_$(date -u +"%Y%m%dT%H%M%SZ").csv"
-          bash ./scripts/log_to_csv.sh ./drift.log "$CSV_OUT"
-          echo "csv_path=$CSV_OUT" >> "$GITHUB_OUTPUT"
-          echo "CSV ready at $CSV_OUT"
-
-      - name: Show generated reports
-        if: always()
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          set -euxo pipefail
-          ls -la ./reports || true
-          cat ./reports/*.csv || true
-
-      # ---------- Commit that exact CSV into 'drift-reports' branch ----------
-      # This does NOT create a PR; it just pushes the file for record-keeping.
-      - name: Commit CSV to reports branch (drift-reports)
-        if: always()
-        env:
-          CSV_FROM_WORKDIR: ${{ steps.build_csv.outputs.csv_path }}
-        run: |
-          set -euo pipefail
-          CSV_PATH="$CSV_FROM_WORKDIR"
-          echo "Using CSV: $CSV_PATH"
-          [ -f "$CSV_PATH" ] || { echo "CSV not found at $CSV_PATH"; ls -R; exit 1; }
-
-          tmp=/tmp/drift.csv
-          cp "$CSV_PATH" "$tmp"
-
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin
-
-          if git ls-remote --exit-code --heads origin drift-reports >/dev/null 2>&1; then
-            git checkout -b drift-reports origin/drift-reports
-          else
-            git checkout --orphan drift-reports
-            rm -rf .
-          fi
-
-          mkdir -p "${{ env.WORKDIR }}/reports"
-          fname="$(basename "$CSV_PATH")"
-          mv "$tmp" "${{ env.WORKDIR }}/reports/$fname"
-
-          git add "${{ env.WORKDIR }}/reports/$fname"
-          git commit -m "chore(drift): add CSV report for ${GITHUB_SHA::7} [skip ci]"
-          git push -u origin drift-reports
-
-      # -------- Fail PR if drift was detected --------
-      - name: Fail PR if Drift Detected
-        if: failure() || steps.drift.outcome == 'failure'
-        run: |
-          echo " DRIFT DETECTED. Failing build."
-          exit 1
+        
