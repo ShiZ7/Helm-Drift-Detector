@@ -1,210 +1,123 @@
 name: Helm Drift Detection
 
 on:
-
   pull_request:
-
     branches: [ main, master ]
-
     paths:
-
       - 'Helm-Drift-Detector/**'
-
       - '.github/workflows/drift-check.yml'
 
 permissions:
-
   contents: write          # we push CSV back to the PR branch
-
   pull-requests: write
 
 env:
-
   WORKDIR: Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection
 
 jobs:
-
   detect-drift:
-
     name: Detect Drift in HPA/Service Config
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout repo
-
         uses: actions/checkout@v4
-
         with:
-
           fetch-depth: 0   # needed to push back to the PR branch
 
       - name: Authenticate to GCP (uses your JSON secret)
-
         uses: google-github-actions/auth@v2
-
         with:
-
           credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
 
       - name: Get GKE Credentials
-
         uses: google-github-actions/get-gke-credentials@v2
-
         with:
-
           cluster_name: cluster-1
-
           location: us-central1
-
           project_id: exchange-sandbox-2f1f
 
       - name: Install Helm + yq
-
         run: |
-
           curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-
           YQ_VERSION=v4.44.3
-
           sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
-
           sudo chmod +x /usr/local/bin/yq
-
           helm version && yq --version
 
       - name: Debug & verify files
-
         run: |
-
           set -euxo pipefail
-
           echo "Workspace: $GITHUB_WORKSPACE"
-
           ls -la
-
           echo "---- Listing $WORKDIR ----"
-
           ls -la "$WORKDIR"
-
           echo "---- find detect-drift & desired.yaml ----"
-
           find "$WORKDIR" -maxdepth 3 -type f \( -name "detect-drift.sh" -o -name "desired.yaml" \) -print
-
           test -f "$WORKDIR/scripts/detect-drift.sh"
-
           test -f "$WORKDIR/desired.yaml"
-
           chmod +x "$WORKDIR/scripts/detect-drift.sh"
 
       - name: Run Drift Detection Script
-
         id: detect
-
         working-directory: ${{ env.WORKDIR }}
-
         run: |
-
           set -euxo pipefail
-
           bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
-
           # Derive drift flag from log (do NOT fail here)
-
           if grep -q '^DRIFT:' drift.log; then
-
             echo "drift=true" >> "$GITHUB_OUTPUT"
-
           else
-
             echo "drift=false" >> "$GITHUB_OUTPUT"
-
           fi
 
       - name: Upload Drift Report (artifact)
-
         if: always()
-
         uses: actions/upload-artifact@v4
-
         with:
-
           name: drift-log
-
           path: ${{ env.WORKDIR }}/drift.log
 
       - name: Build CSV drift report
-
         id: csv
-
         working-directory: ${{ env.WORKDIR }}
-
         run: |
-
           set -euxo pipefail
-
           mkdir -p reports
-
           chmod +x ./scripts/log_to_csv.sh
-
           CSV_FILE="./reports/drift_report_$(date -u +'%Y%m%dT%H%M%SZ').csv"
-
           ./scripts/log_to_csv.sh drift.log "$CSV_FILE"
-
           echo "csv_path=$CSV_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Show generated reports
-
         working-directory: ${{ env.WORKDIR }}
-
         run: ls -la reports || true
 
       - name: Commit CSV to PR branch
-
         if: steps.detect.outputs.drift == 'true'
-
         working-directory: ${{ env.WORKDIR }}
-
         env:
-
           CSV: ${{ steps.csv.outputs.csv_path }}
-
         run: |
-
           set -euxo pipefail
-
           git config user.name  "github-actions[bot]"
-
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # Switch to the PR head branch and commit only the CSV
-
           BRANCH="${{ github.head_ref }}"
-
           git checkout "$BRANCH"
-
           git add -f "$CSV" || true
 
           if git diff --cached --quiet; then
-
             echo "No CSV changes to commit."
-
             exit 0
-
           fi
 
           git commit -m "chore(drift): add CSV report for ${{ github.sha }} [skip ci]"
-
           git push origin "HEAD:$BRANCH"
 
       - name: Fail PR if drift detected
-
         if: steps.detect.outputs.drift == 'true'
-
         run: |
-
           echo "DRIFT DETECTED. Failing build."
-
           exit 1
- 
