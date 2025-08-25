@@ -9,7 +9,7 @@ spec:
   ports:
     - name: http
       port: 40
-      targetPort: 7070
+      targetPort: 9090
       protocol: TCP
   selector:
     app: test-nginx
