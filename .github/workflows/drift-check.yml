@@ -22,7 +22,7 @@ jobs:
     steps:
     - name: Checkout Repo
       uses: actions/checkout@v4
-      
+
     - name: Authenticate to GCP (uses your JSON secret)
       uses: google-github-actions/auth@v2
       with:
@@ -37,44 +37,46 @@ jobs:
         
     - name: Install Helm + yq
       run: |
-        # Install Helm
         curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-
-        # Install yq (curl method)
         YQ_VERSION=v4.44.3
-        curl -L https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64 -o /usr/local/bin/yq
-
-        # Make yq executable
+        sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
         sudo chmod +x /usr/local/bin/yq
-
-        # Check the installed versions
         helm version && yq --version
-        
+
     - name: Debug & verify files
       run: |
         set -euxo pipefail
         echo "Workspace: $GITHUB_WORKSPACE"
         ls -la 
-        echo "---- Listing $WORKDIR ----"
+        echo "—--- Listing $WORKDIR ----"
         ls -la "$WORKDIR"
         echo "--- find detect-drift & desired.yaml ----"
         find "$WORKDIR" -maxdepth 3 -type f \( -name "detect-drift.sh" -o -name "desired.yaml" \) -print 
         test -f "$WORKDIR/scripts/detect-drift.sh"
         test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in SWORKDIR" && exit 2) 
         chmod +x "$WORKDIR/scripts/detect-drift.sh"
-        
+
     - name: Run Drift Detection Script 
       working-directory: ${{ env.WORKDIR }} 
       run: |
-        set -euxo pipefail 
+        set -euxo pipefail
         bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
-        
+
+    - name: Check generated drift reports
+      run: |
+        echo "Listing drift_report files..."
+        ls -l ${GITHUB_WORKSPACE}/Helm-Drift-Detector/Helm-Drift-Detection/reports
+
+    - name: Convert Logs to CSV
+      run: |
+        ./scripts/log_to_csv.sh drift.log
+
     - name: Upload Drift Report
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: drift-report
-        path: ${{ github.workspace }}/Helm-Drift-Detector/Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection/reports/drift_report_history.csv
+        path: ${{ github.workspace }}/Helm-Drift-Detector/Helm-Drift-Detection/reports/drift_report_*.csv
 
     - name: Fail PR if Drift Detected
       if: failure()
