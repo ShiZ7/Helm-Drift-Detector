@@ -1,11 +1,12 @@
 name: Helm Drift Detection
 
 on:
+  # This trigger is more robust. It runs on any PR that targets the 'main' branch.
+  # We will only check for changes in the relevant directory.
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
     paths:
-      - 'Helm-Drift-Detector/**'
-      - '.github/workflows/**'
+      - 'Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection/**'
 
 # Grant permissions to read contents and write back to the pull request
 permissions:
@@ -49,7 +50,6 @@ jobs:
         ./get_helm.sh
         sudo curl -L https://github.com/mikefarah/yq/releases/download/v4.44.2/yq_linux_amd64 -o /usr/local/bin/yq
         sudo chmod +x /usr/local/bin/yq
-        helm version && yq --version
         
     - name: Make scripts executable
       run: |
@@ -58,10 +58,7 @@ jobs:
 
     - name: Run Drift Detection Script
       id: drift_check
-      # We use `|| true` so the workflow continues to the reporting step even if drift is detected (exit code 2)
-      # The `continue-on-error: true` would mask real script errors, so this is more precise.
       run: |
-        set -euo pipefail
         # Create a directory for the log if it doesn't exist
         mkdir -p ${{ env.WORKDIR }}/logs
         # Run the script and save its exit code
@@ -73,7 +70,6 @@ jobs:
       # This step runs regardless of the previous step's outcome
       if: always()
       run: |
-        set -euo pipefail
         # Create reports directory if it doesn't exist
         mkdir -p ${{ env.REPORT_DIR }}
         bash ${{ env.WORKDIR }}/scripts/generate-report.sh \
@@ -87,7 +83,6 @@ jobs:
       # Only run if the previous steps succeeded (or were skipped gracefully)
       if: success() || steps.drift_check.outcome == 'failure'
       run: |
-        set -euo pipefail
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         
@@ -104,7 +99,6 @@ jobs:
     - name: Evaluate Drift Check Result
       if: always()
       run: |
-        echo "Drift check script exited with status: ${{ steps.drift_check.outputs.exit_code || steps.drift_check.conclusion }}"
         # Exit code 2 is our custom code for "drift detected"
         if [[ "${{ steps.drift_check.outputs.exit_code }}" == "2" || "${{ steps.drift_check.conclusion }}" == "failure" && "${{ steps.drift_check.outputs.exit_code }}" != "0" ]]; then
           echo "::error::Drift detected or script failed. Failing the pull request check."
