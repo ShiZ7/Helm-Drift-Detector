@@ -1,37 +1,29 @@
 name: Helm Drift Detection
 
 on:
-  # This trigger is more robust. It runs on any PR that targets the 'main' branch.
-  # We will only check for changes in the relevant directory.
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
     paths:
-      - 'Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection/**'
+      - 'Helm-Drift-Detector/**'
+      - '.github/workflows/**'
 
-# Grant permissions to read contents and write back to the pull request
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 env:
   WORKDIR: Helm-Drift-Detector/Helm-Drift-Detection/Helm-Detection
-  REPORT_DIR: Helm-Drift-Detector/Helm-Drift-Detection/reports
-  REPORT_FILE: drift_history.csv
-  NAMESPACE: sandbox-nginx # Centralize namespace config
 
 jobs:
   detect-drift:
-    name: Detect Drift in HPA/Service Config
+    name: Detect Drift in HPA/Service Config 
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout Repo
       uses: actions/checkout@v4
-      # Fetch full history to allow pushing back
-      with:
-        fetch-depth: 0 
-
-    - name: Authenticate to GCP
+      
+    - name: Authenticate to GCP (uses your JSON secret)
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
@@ -45,64 +37,47 @@ jobs:
         
     - name: Install Helm + yq
       run: |
-        curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-        chmod 700 get_helm.sh
-        ./get_helm.sh
-        sudo curl -L https://github.com/mikefarah/yq/releases/download/v4.44.2/yq_linux_amd64 -o /usr/local/bin/yq
+        # Install Helm
+        curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+        # Install yq (curl method)
+        YQ_VERSION=v4.44.3
+        curl -L https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64 -o /usr/local/bin/yq
+
+        # Make yq executable
         sudo chmod +x /usr/local/bin/yq
-        
-    - name: Make scripts executable
-      run: |
-        chmod +x ${{ env.WORKDIR }}/scripts/detect-drift.sh
-        chmod +x ${{ env.WORKDIR }}/scripts/generate-report.sh
 
-    - name: Run Drift Detection Script
-      id: drift_check
-      run: |
-        # Create a directory for the log if it doesn't exist
-        mkdir -p ${{ env.WORKDIR }}/logs
-        # Run the script and save its exit code
-        bash ${{ env.WORKDIR }}/scripts/detect-drift.sh ${{ env.WORKDIR }}/desired.yaml | tee ${{ env.WORKDIR }}/logs/drift.log
-      continue-on-error: true
+        # Check the installed versions
+        helm version && yq --version
         
-    - name: Generate Drift Report
-      id: generate_report
-      # This step runs regardless of the previous step's outcome
+    - name: Debug & verify files
+      run: |
+        set -euxo pipefail
+        echo "Workspace: $GITHUB_WORKSPACE"
+        ls -la 
+        echo "---- Listing $WORKDIR ----"
+        ls -la "$WORKDIR"
+        echo "--- find detect-drift & desired.yaml ----"
+        find "$WORKDIR" -maxdepth 3 -type f \( -name "detect-drift.sh" -o -name "desired.yaml" \) -print 
+        test -f "$WORKDIR/scripts/detect-drift.sh"
+        test -f "$WORKDIR/desired.yaml" || (echo "desired.yaml missing in SWORKDIR" && exit 2) 
+        chmod +x "$WORKDIR/scripts/detect-drift.sh"
+        
+    - name: Run Drift Detection Script 
+      working-directory: ${{ env.WORKDIR }} 
+      run: |
+        set -euxo pipefail 
+        bash ./scripts/detect-drift.sh ./desired.yaml | tee drift.log
+        
+    - name: Upload Drift Report
       if: always()
-      run: |
-        # Create reports directory if it doesn't exist
-        mkdir -p ${{ env.REPORT_DIR }}
-        bash ${{ env.WORKDIR }}/scripts/generate-report.sh \
-          "${{ env.WORKDIR }}/logs/drift.log" \
-          "${{ env.REPORT_DIR }}/${{ env.REPORT_FILE }}" \
-          "${{ github.actor }}" \
-          "${{ github.event.pull_request.number }}" \
-          "${{ env.NAMESPACE }}"
+      uses: actions/upload-artifact@v4
+      with:
+        name: drift-report
+        path: ${{ github.workspace }}/${{ env.WORKDIR }}/drift.log
 
-    - name: Commit and Push Report
-      # Only run if the previous steps succeeded (or were skipped gracefully)
-      if: success() || steps.drift_check.outcome == 'failure'
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # Check if the report file has any changes
-        git add ${{ env.REPORT_DIR }}/${{ env.REPORT_FILE }}
-        if git diff --staged --quiet; then
-          echo "No changes to the drift report. Nothing to commit."
-        else
-          echo "Drift report updated. Committing changes."
-          git commit -m "docs: Update drift report for PR #${{ github.event.pull_request.number }}"
-          git push origin HEAD:${{ github.head_ref }}
-        fi
-
-    - name: Evaluate Drift Check Result
-      if: always()
-      run: |
-        # Exit code 2 is our custom code for "drift detected"
-        if [[ "${{ steps.drift_check.outputs.exit_code }}" == "2" || "${{ steps.drift_check.conclusion }}" == "failure" && "${{ steps.drift_check.outputs.exit_code }}" != "0" ]]; then
-          echo "::error::Drift detected or script failed. Failing the pull request check."
-          exit 1
-        else
-          echo "No drift detected and script ran successfully."
-        fi
+    - name: Fail PR if Drift Detected
+      if: failure()
+      run: | 
+        echo " DRIFT DETECTED. Failing build."
+        exit 1
