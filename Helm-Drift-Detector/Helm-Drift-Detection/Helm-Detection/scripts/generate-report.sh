@@ -16,20 +16,25 @@ if [ ! -f "$OUTPUT_CSV_FILE" ]; then
   echo "Timestamp,Editor,PR_Number,Namespace,Resource,Field,Local_Value,Live_Value" > "$OUTPUT_CSV_FILE"
 fi
 
-# --- Parse log and append to CSV ---
 # Get current timestamp in ISO 8601 format
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-drift_found=0
-# Read the log file and look for our structured DRIFT_DATA lines
-grep "DRIFT_DATA:" "$INPUT_LOG_FILE" | while IFS=':' read -r _ resource field local_val live_val; do
-    # Append a new row to the CSV file
-    echo "$TIMESTAMP,$PR_AUTHOR,$PR_NUMBER,$NAMESPACE,$resource,$field,$local_val,$live_val" >> "$OUTPUT_CSV_FILE"
-    drift_found=1
-done
+# --- MODIFICATION START ---
+# First, check if the log file contains any drift data using grep -q (quiet mode).
+# This prevents the script from failing if no drift is found.
+if grep -q "DRIFT_DATA:" "$INPUT_LOG_FILE"; then
+  echo "Drift data found. Generating report..."
+  
+  # If drift exists, process the lines and append to the CSV.
+  # This pipe is now safe because we know grep will find matches and exit with 0.
+  grep "DRIFT_DATA:" "$INPUT_LOG_FILE" | while IFS=':' read -r _ resource field local_val live_val; do
+      # Append a new row to the CSV file
+      echo "$TIMESTAMP,$PR_AUTHOR,$PR_NUMBER,$NAMESPACE,$resource,$field,$local_val,$live_val" >> "$OUTPUT_CSV_FILE"
+  done
 
-if [ "$drift_found" -eq 1 ]; then
-    echo "Drift report generated at $OUTPUT_CSV_FILE"
+  echo "Drift report successfully updated at $OUTPUT_CSV_FILE"
 else
-    echo "No drift data found in log file to report."
+  # If no drift is found, print a message and exit successfully.
+  echo "No drift data found in log file to report. Skipping CSV update."
 fi
+# --- MODIFICATION END ---
